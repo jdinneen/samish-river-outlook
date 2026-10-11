@@ -29,6 +29,8 @@ else:
     URL = f'http://127.0.0.1:{SERVER.server_port}'
 NOW = datetime.now(timezone.utc).replace(microsecond=0)
 ISO = lambda h=0: (NOW + timedelta(hours=h)).isoformat()
+RADAR_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="600" height="550" viewBox="0 0 600 550">
+<rect width="600" height="550" fill="#eef4f2"/><path d="M80 0 L150 80 125 160 210 235 180 340 260 430 235 550" fill="none" stroke="#adc9c4" stroke-width="26"/><path d="M320 0 V550 M0 220 H600 M0 390 H600" stroke="#cad8d4" stroke-width="2"/><g fill="none" stroke-linecap="round"><path d="M250 65 C340 95 410 140 500 180" stroke="#70c46e" stroke-width="28"/><path d="M285 85 C355 115 405 145 470 170" stroke="#f4d44d" stroke-width="18"/><path d="M330 112 C380 130 410 145 445 156" stroke="#dc6b3d" stroke-width="10"/></g><text x="18" y="30" font-family="sans-serif" font-size="18" fill="#24464b">Synthetic KATX radar test fixture</text><text x="18" y="530" font-family="sans-serif" font-size="14" fill="#526a6d">Browser test only · live Site requests NOAA</text></svg>"""
 
 def fixtures():
     def series(rows):
@@ -63,12 +65,17 @@ with sync_playwright() as p:
     errors = []
     page.on('pageerror', lambda e: errors.append(str(e)))
     payload = fixtures()
-    mode = {'fail': False, 'direct_fail': False}
+    mode = {'fail': False, 'direct_fail': False, 'radar_fail': False}
 
     def route(req):
         u = req.request.url
         if '127.0.0.1' in u or 'localhost' in u:
             return req.continue_()
+        if 'radar.weather.gov/ridge/standard/KATX_' in u:
+            if mode['radar_fail']:
+                return req.fulfill(status=503, body='Radar unavailable')
+            return req.fulfill(status=200, content_type='image/svg+xml', body=RADAR_SVG,
+                               headers={'Access-Control-Allow-Origin': '*'})
         if mode['fail'] or mode['direct_fail'] and 'waterdata.usgs.gov' in u:
             return req.fulfill(status=503, body='Unavailable')
         key = 'nwps' if '/nwps/' in u else 'usgs' if 'waterdata.usgs.gov' in u else 'rain' if 'weather.gov' in u else 'tides'
@@ -77,6 +84,7 @@ with sync_playwright() as p:
     page.route('**/*', route)
     page.goto(URL)
     page.wait_for_function("!document.getElementById('refresh').disabled")
+    page.wait_for_function("document.getElementById('radar-status').textContent !== 'Loading'")
     out = Path(tempfile.mkdtemp(prefix='samish-browser-review-'))
     axe_path = os.environ.get('AXE_PATH')
     if os.environ.get('REQUIRE_AXE') == '1' and not axe_path:
@@ -245,8 +253,20 @@ with sync_playwright() as p:
     }""")
     assert page.locator('#flow').inner_text() == '101'
     assert page.locator('#rain-total').inner_text() == '0.80'
-    assert page.locator('.measurement-limit').inner_text() == 'Forecast only. Actual basin rain is not measured here.'
+    assert page.locator('.context-grid .measurement-limit').inner_text() == 'Forecast only. Actual basin rain is not measured here.'
     assert page.locator('#flow-chart svg').count() == 1
+    assert page.locator('#radar-status').inner_text() == 'NOAA loop loaded'
+    assert page.locator('#radar-loop').evaluate('img => img.complete && img.naturalWidth > 0')
+    assert page.locator('#radar-toggle').inner_text() == 'Pause loop'
+    assert page.locator('#flow-chart').evaluate("el => el.getBoundingClientRect().top < document.getElementById('surprise-watch').getBoundingClientRect().top")
+    assert page.locator('#radar-loop').evaluate("el => el.getBoundingClientRect().top < document.getElementById('surprise-watch').getBoundingClientRect().top")
+    assert page.locator('#saved-path-legend').is_hidden()
+    assert page.locator('#flow-chart path[stroke="var(--saved)"]').count() == 0
+    page.locator('#radar-toggle').click()
+    page.wait_for_function("document.getElementById('radar-status').textContent === 'NOAA image loaded'")
+    assert page.locator('#radar-toggle').inner_text() == 'Play loop'
+    page.locator('#radar-toggle').click()
+    page.wait_for_function("document.getElementById('radar-status').textContent === 'NOAA loop loaded'")
     assert page.locator('#watch-state').inner_text() == 'LEARNING'
     axe_runs += audit_state('learning')
     screenshot_state('learning')
@@ -276,6 +296,8 @@ with sync_playwright() as p:
     assert page.locator('#watch-expected').inner_text() == '80'
     assert page.locator('#watch-observed').inner_text() == '101'
     assert page.locator('#watch-change').inner_text() == '+4'
+    assert page.locator('#saved-path-legend').is_visible()
+    assert page.locator('#flow-chart path[stroke="var(--saved)"]').count() >= 1
 
     first_history = page.evaluate("JSON.parse(localStorage.getItem('samish-river-outlook.forecast-snapshots.v1'))")
     current = max(first_history, key=lambda row: row['issueTime'])
@@ -339,6 +361,16 @@ with sync_playwright() as p:
     page.wait_for_function("!document.getElementById('refresh').disabled")
     assert page.locator('#brief-fallback').is_hidden()
     assert page.locator('#watch-state').inner_text() == 'CHECK — OUTPACING'
+    mode['radar_fail'] = True
+    page.locator('#radar-toggle').click()
+    page.wait_for_function("document.getElementById('radar-status').textContent === 'Unavailable'")
+    assert page.locator('.radar-frame').evaluate("el => el.classList.contains('unavailable')")
+    assert page.locator('#flow').inner_text() == '101'
+    assert 'river values remain independent' in page.locator('#radar-requested').inner_text()
+    mode['radar_fail'] = False
+    page.locator('#radar-toggle').click()
+    page.wait_for_function("document.getElementById('radar-status').textContent !== 'Loading'")
+    assert page.locator('#radar-status').inner_text() in ('NOAA loop loaded', 'NOAA image loaded')
     for scheme in ['light', 'dark']:
         page.emulate_media(color_scheme=scheme)
         for width in [320, 390, 768, 1440]:
@@ -387,6 +419,14 @@ with sync_playwright() as p:
     axe_runs += audit_state('all-feeds-unavailable')
     screenshot_state('all-feeds-unavailable')
     page.screenshot(path=str(out / 'feeds-unavailable.png'), full_page=True)
+    motion_page = context.new_page()
+    motion_page.route('**/*', route)
+    motion_page.emulate_media(reduced_motion='reduce')
+    motion_page.goto(URL)
+    motion_page.wait_for_function("document.getElementById('radar-status').textContent !== 'Loading'")
+    assert motion_page.locator('#radar-status').inner_text() == 'NOAA image loaded'
+    assert motion_page.locator('#radar-toggle').inner_text() == 'Play loop'
+    motion_page.close()
     assert not errors, errors
     axe_note = f'; {axe_runs} axe-core panel audits' if axe_runs else ''
     print(f'PASS: {result} numerical contracts; live UI fixtures, fallback, all-feed failure, keyboard, clipboard and 24 responsive/dark panel checks{axe_note}. Screenshots: {out}')

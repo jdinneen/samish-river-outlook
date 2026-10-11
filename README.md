@@ -4,13 +4,19 @@
 
 Buildless HTML, CSS and JavaScript. Each browser requests the public USGS Burlington
 gauge, NOAA SMRW1 forecast, two NWS precipitation grid points, and Bellingham tide
-predictions. No runtime dependencies, tracking, accounts, backend or automated alerts.
+predictions, and displays the official NOAA KATX radar image directly. No runtime
+dependencies, tracking, accounts, backend or automated alerts.
 GitHub Pages serves this repository's main branch at the existing address.
 The deployed release receipt is `version.json`; it records the public release label
 and SHA-256 content hashes for the four runtime assets.
 
-Version 3 separates observations, forecasts and retrospective research. It removes
-the previous probability/action labels and inferred crest status. It adds:
+Version 4 keeps the version 3 evidence boundaries while putting the operating graphics
+first. It adds:
+
+- a first-screen river graph beside the official KATX standard base-reflectivity loop,
+  with a still-image control for pausing animation and reduced-motion preferences;
+- a separately labeled earlier saved path on the river graph when the existing
+  saved-forecast comparison has a path captured 3–36 hours earlier;
 
 - a browser-profile saved-forecast check that can show when the gauge is materially
   above a National Oceanic and Atmospheric Administration (NOAA) path captured
@@ -49,6 +55,10 @@ the previous probability/action labels and inferred crest status. It adds:
 - Rain is a mean of two selected grid points, not a basin-wide measurement. Both
   points must have full next-24-hour coverage and updates no older than 24 hours.
   Partial native intervals use uniform apportionment; missing values are not zero.
+- The KATX radar image is direct weather context. It carries its radar time along
+  the bottom of each frame; the page separately reports when the browser requested
+  it. Reflectivity is not ground-level rainfall, basin runoff or a correction to
+  the river forecast. A failed radar image does not change or erase river values.
 - Tide extrema are NOAA predictions in feet MLLW at Bellingham, not local access
   clearance. Times display in America/Los_Angeles, including PST/PDT.
 - Numbered research summaries are a fixed October 11, 2026 snapshot checked against
@@ -84,7 +94,9 @@ nearest-reading change windows, corrupt interior path points, malformed storage,
 unrounded warning decisions, forecast revisions,
 rainfall coverage, and tide times. Browser checks cover the learning, tracking,
 above-saved-path, outpacing, stale, partial-feed and all-feed-failure states; field
-snapshot download; keyboard navigation; clipboard fallback; and panel overflow at
+snapshot download; loop/still radar controls, radar failure independent of river
+feeds, reduced-motion behavior, saved-path chart visibility; keyboard navigation;
+clipboard fallback; and panel overflow at
 320/390/768/1440 pixels in light and dark modes. Screenshots go to a temporary
 directory outside the repository. Tests never run scientific models.
 
@@ -98,4 +110,5 @@ or scientific fitness.
 
 Provider contracts: [USGS API migration](https://api.waterdata.usgs.gov/docs/ogcapi/migration/),
 [NWS grid points](https://weather-gov.github.io/api/gridpoints),
+[NWS radar](https://radar.weather.gov/station/KATX/standard),
 [NOAA tide API](https://api.tidesandcurrents.noaa.gov/api/prod/).

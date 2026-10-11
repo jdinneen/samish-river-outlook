@@ -15,7 +15,13 @@
     return value.year + value.month + value.day;
   };
   const SNAPSHOT_KEY = 'samish-river-outlook.forecast-snapshots.v1';
-  let state = null, busy = false;
+  const RADAR = {
+    loop: 'https://radar.weather.gov/ridge/standard/KATX_loop.gif',
+    still: 'https://radar.weather.gov/ridge/standard/KATX_0.gif',
+    page: 'https://radar.weather.gov/station/KATX/standard'
+  };
+  let state = null, busy = false, radarRequestedAt = null;
+  let radarMode = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'still' : 'loop';
   const sources = [
     { name: 'NOAA river forecast & gauge copy', url: 'https://api.water.noaa.gov/nwps/v1/gauges/smrw1/stageflow' },
     { name: 'USGS Burlington gauge', url: 'https://api.waterdata.usgs.gov/ogcapi/v1/collections/continuous/items?monitoring_location_id=USGS-12201500&parameter_code=00060&time=P3D&f=json&limit=1000' },
@@ -54,6 +60,26 @@
       localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshots));
       return { status: 'available', snapshots };
     } catch { return { status: 'unavailable', snapshots: [] }; }
+  }
+  function radarSourceCard() {
+    const status = $('radar-status').textContent, unavailable = status === 'Unavailable';
+    return '<article id="radar-source-card" class="card source-card"><h2>NOAA KATX Doppler radar</h2><span class="pill ' + (unavailable ? 'caution' : 'neutral') + '">' + esc(status) + '</span><p class="detail">Direct base-reflectivity image; weather context only.</p><p class="meta">' + esc(radarRequestedAt ? 'Image requested ' + date(radarRequestedAt) + '; the radar time is printed in the frame.' : 'Image has not been requested yet.') + '</p><a href="' + RADAR.page + '" target="_blank" rel="noopener">Inspect official radar ↗</a></article>';
+  }
+  function updateRadarSourceCard() {
+    const card = $('radar-source-card');
+    if (card) card.outerHTML = radarSourceCard();
+  }
+  function refreshRadar(force = false) {
+    const image = $('radar-loop'), period = 5 * 60 * 1000;
+    radarRequestedAt = Date.now();
+    badge('radar-status', 'Loading', 'neutral');
+    put('radar-requested', 'Requesting the official ' + (radarMode === 'loop' ? 'radar loop' : 'still radar image') + ' at ' + date(radarRequestedAt) + '…');
+    $('radar-toggle').disabled = true;
+    image.classList.remove('unavailable');
+    image.parentElement.classList.remove('unavailable');
+    image.dataset.mode = radarMode;
+    image.src = RADAR[radarMode] + '?v=' + (force ? radarRequestedAt : Math.floor(radarRequestedAt / period));
+    updateRadarSourceCard();
   }
   async function load() {
     if (busy) return;
@@ -124,7 +150,7 @@
     renderCrest(fc, allTides);
     const directLast = [...direct].sort((a, b) => a.t - b.t).at(-1);
     const sourceTimes = [(fc.issued === null ? 'Forecast issue time unavailable' : 'Forecast issued ' + date(fc.issued)) + (gaugeCopy.error ? ' · Gauge copy: ' + gaugeCopy.error : ''), directLast ? 'Latest direct USGS reading ' + date(directLast.t) : 'No direct USGS reading', ...rains.map(r => r ? 'Forecast updated ' + date(r.updated) : 'Update unavailable'), 'Astronomical high/low predictions; issue time not supplied'];
-    $('source-status').innerHTML = feeds.map((f, i) => '<article class="card source-card"><h2>' + esc(f.name) + '</h2><span class="pill ' + (f.error ? 'caution' : 'neutral') + '">' + (f.error ? 'Feed problem' : 'Retrieved') + '</span><p class="detail">' + esc(sourceTimes[i]) + '</p><p class="meta">' + esc(f.error || 'Retrieved ' + date(f.retrieved)) + '</p><a href="' + esc(f.url) + '" target="_blank" rel="noopener">Inspect public feed ↗</a></article>').join('');
+    $('source-status').innerHTML = feeds.map((f, i) => '<article class="card source-card"><h2>' + esc(f.name) + '</h2><span class="pill ' + (f.error ? 'caution' : 'neutral') + '">' + (f.error ? 'Feed problem' : 'Retrieved') + '</span><p class="detail">' + esc(sourceTimes[i]) + '</p><p class="meta">' + esc(f.error || 'Retrieved ' + date(f.retrieved)) + '</p><a href="' + esc(f.url) + '" target="_blank" rel="noopener">Inspect public feed ↗</a></article>').join('') + radarSourceCard();
     $('forecast-table').innerHTML = fc.usable ? '<table><caption>Available NOAA forecast; first and last values may be interpolated within supported intervals.</caption><thead><tr><th scope="col">Pacific time</th><th scope="col">Flow (cfs)</th></tr></thead><tbody>' + fc.rows.map(r => '<tr><td>' + esc(date(r.t)) + '</td><td>' + num(r.q) + '</td></tr>').join('') + '</tbody></table>' : '<p>No usable river forecast. No values have been extrapolated.</p>';
     const recent = observations.filter(r => r.t >= now - 48 * H).slice().reverse();
     $('observed-table').innerHTML = recent.length ? '<table><caption>Provisional USGS observations from the past 48 hours, newest first.</caption><thead><tr><th scope="col">Pacific time</th><th scope="col">Flow (cfs)</th><th scope="col">Retrieved via</th></tr></thead><tbody>' + recent.map(r => '<tr><td>' + esc(date(r.t)) + '</td><td>' + num(r.q) + '</td><td>' + esc(r.source) + '</td></tr>').join('') + '</tbody></table>' : '<p>No observations retrieved for the past 48 hours.</p>';
@@ -174,26 +200,30 @@
   }
   function chart() {
     if (!state) return;
-    const { now, observations, fc } = state, start = now - 48 * H, end = now + 72 * H;
-    const obs = observations.filter(r => r.t >= start), future = fc.usable ? fc.rows : [], all = [...obs, ...future];
-    if (!all.length) { $('flow-chart').className = 'chart-empty'; put('flow-chart', 'River data unavailable. Check the official sources.'); return; }
+    const { now, observations, fc, watch } = state, start = now - 48 * H, end = now + 72 * H;
+    const obs = observations.filter(r => r.t >= start), future = fc.usable ? fc.rows : [];
+    const saved = (watch?.snapshot?.alignedPath || []).map(r => ({ t: Number(r?.t), q: Number(r?.q) })).filter(r => Number.isFinite(r.t) && Number.isFinite(r.q) && r.q >= 0 && r.t >= start && r.t <= end);
+    const all = [...obs, ...future, ...saved];
+    $('saved-path-legend').hidden = !saved.length;
+    if (!all.length) { $('flow-chart').className = 'chart-empty'; put('flow-chart', 'River data unavailable. Check the official sources.'); put('chart-description', 'No river path is available. The radar remains separate weather context.'); return; }
     const w = Math.max(230, $('flow-chart').clientWidth), h = 280, l = 49, right = 13, top = 22, bottom = 44;
     const max = Math.max(1, ...all.map(r => r.q)) * 1.15, x = t => l + (t - start) / (end - start) * (w - l - right), y = q => top + (1 - q / max) * (h - top - bottom);
-    const paths = (rows, gap, color, dashed) => {
+    const paths = (rows, gap, color, dash) => {
       const groups = []; rows.forEach((r, i) => { if (!i || r.t - rows[i - 1].t > gap) groups.push([]); groups.at(-1).push(r); });
-      return groups.map(g => g.length === 1 ? '<circle cx="' + x(g[0].t) + '" cy="' + y(g[0].q) + '" r="3" fill="' + color + '"/>' : '<path d="' + g.map((r, i) => (i ? 'L' : 'M') + x(r.t).toFixed(2) + ',' + y(r.q).toFixed(2)).join(' ') + '" fill="none" stroke="' + color + '" stroke-width="2.5"' + (dashed ? ' stroke-dasharray="7 5"' : '') + '/>').join('');
+      return groups.map(g => g.length === 1 ? '<circle cx="' + x(g[0].t) + '" cy="' + y(g[0].q) + '" r="3" fill="' + color + '"/>' : '<path d="' + g.map((r, i) => (i ? 'L' : 'M') + x(r.t).toFixed(2) + ',' + y(r.q).toFixed(2)).join(' ') + '" fill="none" stroke="' + color + '" stroke-width="2.5"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>').join('');
     };
-    const desc = 'Flow in cubic feet per second. Observations cover the previous 48 hours where available. ' + (fc.usable ? 'NOAA forecast extends ' + num(fc.hours) + ' hours from this check; highest forecast value is ' + num(fc.max) + ' cfs.' : 'NOAA forecast unavailable.');
+    const desc = 'Flow in cubic feet per second. Observations cover the previous 48 hours where available. ' + (fc.usable ? 'NOAA forecast extends ' + num(fc.hours) + ' hours from this check; highest forecast value is ' + num(fc.max) + ' cfs.' : 'NOAA forecast unavailable.') + (saved.length ? ' An earlier eligible gauge-aligned path is shown separately.' : ' No eligible earlier saved path is available.');
     let svg = '<svg viewBox="0 0 ' + w + ' ' + h + '" role="img" aria-labelledby="flow-title flow-desc"><title id="flow-title">Samish river flow</title><desc id="flow-desc">' + esc(desc) + '</desc>';
     for (let i = 0; i <= 4; i++) { const q = max * i / 4; svg += '<line x1="' + l + '" x2="' + (w - right) + '" y1="' + y(q) + '" y2="' + y(q) + '" stroke="var(--line)"/><text x="' + (l - 7) + '" y="' + (y(q) + 4) + '" text-anchor="end">' + Math.round(q).toLocaleString('en-US') + '</text>'; }
     svg += '<text x="' + l + '" y="13">cfs</text><line x1="' + x(now) + '" x2="' + x(now) + '" y1="' + top + '" y2="' + (h - bottom) + '" stroke="var(--muted)" stroke-dasharray="3 4"/>';
     const ticks = w < 500 ? [[start, '−48 h'], [now, '0 h'], [end, '+72 h']] : [[start, '−48 h'], [now - 24 * H, '−24 h'], [now, 'Check time'], [now + 24 * H, '+24 h'], [now + 48 * H, '+48 h'], [end, '+72 h']];
     for (let i = 0; i < ticks.length; i++) svg += '<text x="' + x(ticks[i][0]) + '" y="' + (h - 16) + '" text-anchor="' + (i === 0 ? 'start' : i === ticks.length - 1 ? 'end' : 'middle') + '">' + ticks[i][1] + '</text>';
-    svg += paths(obs, 2 * H, 'var(--teal)', false) + paths(future, 6 * H, 'var(--navy)', true) + '</svg>';
+    svg += paths(saved, 6 * H, 'var(--saved)', '2 5') + paths(obs, 2 * H, 'var(--teal)', '') + paths(future, 6 * H, 'var(--navy)', '7 5') + '</svg>';
     $('flow-chart').className = ''; $('flow-chart').innerHTML = svg;
+    put('chart-description', (saved.length ? 'The dotted amber line is the earlier saved path after one gauge alignment. ' : 'No eligible earlier saved path is available yet. ') + 'NOAA’s current dashed forecast remains raw and unshifted. Gaps stay visible; 0 h is this page’s feed-check time.');
   }
   function brief() {
-    return ['Samish River Outlook — field-planning snapshot', 'Feed check: ' + date(state.now), '', 'SAVED-FORECAST CHECK: ' + $('watch-state').textContent, $('watch-title').textContent, $('watch-detail').textContent, $('watch-source').textContent, '', 'Gauge: ' + $('flow').textContent + ' cfs · ' + $('gauge-status').textContent, $('gauge-time').textContent, 'About-24-hour change: ' + $('change24').textContent, 'Near-3-hour change: ' + $('change3').textContent, '', 'SEASONAL RISE COMPARISON: ' + $('rise-status').textContent, $('rise-title').textContent, $('rise-detail').textContent, '', 'NOAA forecast high: ' + $('forecast-high').textContent + ' cfs', $('forecast-time').textContent, $('forecast-coverage').textContent, $('forecast-issue').textContent, $('forecast-revision').textContent, '', $('crest-time').textContent, $('crest-detail').textContent, 'Next 24 h rain, two-point forecast: ' + $('rain-total').textContent + ' in. · ' + $('rain-status').textContent, $('rain-note').textContent, ...[...document.querySelectorAll('.rain-point')].map(el => el.innerText), '', 'Tides: Bellingham predictions, ft MLLW; not Samish Bay access clearance.', ...state.tides.map(r => (r.type === 'H' ? 'High ' : 'Low ') + r.v.toFixed(1) + ' ft · ' + date(r.t)), '', 'Official commercial status is not ingested. Check Washington Department of Health.', 'No confirmed crest, dispatch recommendation, closure call, AI warning, all-clear or reopening authorization. Use established procedures; DOH makes closure/reopening decisions.', 'https://doh.wa.gov/commercialshellfishmap', 'https://jdinneen.github.io/samish-river-outlook/'].join('\n');
+    return ['Samish River Outlook — field-planning snapshot', 'Feed check: ' + date(state.now), '', 'RADAR CONTEXT: ' + $('radar-status').textContent, $('radar-requested').textContent, 'Direct NOAA KATX reflectivity image; frame time is printed on the image; not used in a river, closure or safety calculation.', '', 'SAVED-FORECAST CHECK: ' + $('watch-state').textContent, $('watch-title').textContent, $('watch-detail').textContent, $('watch-source').textContent, '', 'Gauge: ' + $('flow').textContent + ' cfs · ' + $('gauge-status').textContent, $('gauge-time').textContent, 'About-24-hour change: ' + $('change24').textContent, 'Near-3-hour change: ' + $('change3').textContent, '', 'SEASONAL RISE COMPARISON: ' + $('rise-status').textContent, $('rise-title').textContent, $('rise-detail').textContent, '', 'NOAA forecast high: ' + $('forecast-high').textContent + ' cfs', $('forecast-time').textContent, $('forecast-coverage').textContent, $('forecast-issue').textContent, $('forecast-revision').textContent, '', $('crest-time').textContent, $('crest-detail').textContent, 'Next 24 h rain, two-point forecast: ' + $('rain-total').textContent + ' in. · ' + $('rain-status').textContent, $('rain-note').textContent, ...[...document.querySelectorAll('.rain-point')].map(el => el.innerText), '', 'Tides: Bellingham predictions, ft MLLW; not Samish Bay access clearance.', ...state.tides.map(r => (r.type === 'H' ? 'High ' : 'Low ') + r.v.toFixed(1) + ' ft · ' + date(r.t)), '', 'Official commercial status is not ingested. Check Washington Department of Health.', 'No confirmed crest, dispatch recommendation, closure call, AI warning, all-clear or reopening authorization. Use established procedures; DOH makes closure/reopening decisions.', 'https://doh.wa.gov/commercialshellfishmap', 'https://jdinneen.github.io/samish-river-outlook/'].join('\n');
   }
   $('copy-brief').addEventListener('click', async () => {
     const text = brief();
@@ -210,9 +240,35 @@
   const tabs = [...document.querySelectorAll('[role="tab"]')];
   function select(tab) { for (const t of tabs) { const active = t === tab; t.setAttribute('aria-selected', String(active)); t.tabIndex = active ? 0 : -1; $(t.getAttribute('aria-controls')).hidden = !active; } if (tab.id === 'tab-outlook') chart(); }
   for (const tab of tabs) { tab.addEventListener('click', () => select(tab)); tab.addEventListener('keydown', e => { let i = tabs.indexOf(tab); if (e.key === 'ArrowRight') i = (i + 1) % tabs.length; else if (e.key === 'ArrowLeft') i = (i + tabs.length - 1) % tabs.length; else if (e.key === 'Home') i = 0; else if (e.key === 'End') i = tabs.length - 1; else return; e.preventDefault(); select(tabs[i]); tabs[i].focus(); }); }
-  $('refresh').addEventListener('click', load);
+  $('radar-loop').addEventListener('load', () => {
+    const looping = $('radar-loop').dataset.mode === 'loop';
+    badge('radar-status', looping ? 'NOAA loop loaded' : 'NOAA image loaded', 'good');
+    put('radar-requested', 'Image requested ' + date(radarRequestedAt) + '. This request time is not the observation time; check the radar time printed along the bottom of each frame.');
+    $('radar-toggle').disabled = false;
+    put('radar-toggle', looping ? 'Pause loop' : 'Play loop');
+    $('radar-loop').classList.remove('unavailable');
+    $('radar-loop').parentElement.classList.remove('unavailable');
+    updateRadarSourceCard();
+  });
+  $('radar-loop').addEventListener('error', () => {
+    badge('radar-status', 'Unavailable', 'caution');
+    put('radar-requested', 'The NOAA radar image could not be loaded. Open the official radar link; river values remain independent.');
+    $('radar-toggle').disabled = false;
+    put('radar-toggle', radarMode === 'loop' ? 'Try still image' : 'Try radar loop');
+    $('radar-loop').classList.add('unavailable');
+    $('radar-loop').parentElement.classList.add('unavailable');
+    updateRadarSourceCard();
+  });
+  $('radar-toggle').addEventListener('click', () => { radarMode = radarMode === 'loop' ? 'still' : 'loop'; refreshRadar(true); });
+  $('refresh').addEventListener('click', () => { load(); refreshRadar(true); });
   new ResizeObserver(() => { if (!$('outlook').hidden) chart(); }).observe($('flow-chart'));
   setInterval(() => { if (!document.hidden) load(); }, 10 * 60 * 1000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && state && Date.now() - state.now > 10 * 60 * 1000) load(); });
+  setInterval(() => { if (!document.hidden) refreshRadar(); }, 5 * 60 * 1000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    if (state && Date.now() - state.now > 10 * 60 * 1000) load();
+    if (!radarRequestedAt || Date.now() - radarRequestedAt > 5 * 60 * 1000) refreshRadar();
+  });
+  refreshRadar();
   load();
 })();
