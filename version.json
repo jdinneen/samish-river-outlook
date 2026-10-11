@@ -1,0 +1,12 @@
+{
+  "site": "samish-river-outlook",
+  "release": "2026-10-11-v3",
+  "published_at": "2026-10-11T19:28:55Z",
+  "source": "github-pages-main",
+  "asset_sha256": {
+    "index.html": "68a35cd50c887fe8264200f9920d48384f4f048640a99eb91ef237d6f97ffe32",
+    "app.js": "2eb2fbc846e6fe756e7436909b9a8e2042743d89a05b36e71656bf92c00cdbcd",
+    "data.js": "3b2a2293a1a1bef8de69aef1254d1875e993764bedc597088e3523d460ff7f81",
+    "styles.css": "581e248ef988b230765e49e1888b64b5760aa28bcaaa406974821d23dd8382ad"
+  }
+}
