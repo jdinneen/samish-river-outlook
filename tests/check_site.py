@@ -250,7 +250,7 @@ with sync_playwright() as p:
     assert page.locator('#watch-state').inner_text() == 'LEARNING'
     axe_runs += audit_state('learning')
     screenshot_state('learning')
-    assert page.locator('#rise-status').inner_text() == 'Lab screen'
+    assert page.locator('#rise-status').inner_text() == 'Experimental'
     assert 'Not official status' in page.locator('#rise-detail').inner_text()
     assert page.locator('a[href="https://doh.wa.gov/commercialshellfishmap"]').count() >= 2
     assert page.locator('a[href="https://a.atmos.washington.edu/wrfrt/"]').count() == 1

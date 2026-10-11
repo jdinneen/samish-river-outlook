@@ -15,7 +15,7 @@ the previous probability/action labels and inferred crest status. It adds:
 - a browser-profile saved-forecast check that can show when the gauge is materially
   above a National Oceanic and Atmospheric Administration (NOAA) path captured
   3–36 hours earlier and is still rising;
-- a clearly labeled Lab comparison against the confirmed seasonal 24-hour rise
+- a clearly labeled experimental comparison against the confirmed seasonal 24-hour rise
   numbers, while leaving the agency's unconfirmed starting-value method explicit;
 - same-window forecast-revision context, forecast-high/tide pairing, and links to
   separate rainfall observations plus the University of Washington and AccuWeather

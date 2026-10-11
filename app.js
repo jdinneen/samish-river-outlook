@@ -139,7 +139,7 @@
     put('watch-title', titles[watch.code] || titles.unknown);
     if (watch.snapshot) {
       put('watch-detail', 'A gauge-aligned NOAA path saved ' + num(watch.age) + ' hours before this observation expected ' + num(watch.expected) + ' cfs. The gauge reads ' + num(watch.observed) + ' cfs (' + signed(watch.difference) + ' cfs), and changed ' + signed(watch.change3) + ' cfs over ' + num(watch.span3) + ' hours. The frozen watch line is ' + num(watch.line) + ' cfs. This is not a risk or safety status, closure call, or all-clear.');
-      put('watch-source', 'Saved ' + date(watch.snapshot.capturedAt) + ' from NOAA issue ' + date(watch.snapshot.issueTime) + '. The 10% line is an unvalidated Lab heuristic.');
+      put('watch-source', 'Saved ' + date(watch.snapshot.capturedAt) + ' from NOAA issue ' + date(watch.snapshot.issueTime) + '. The 10% line is an unvalidated experimental heuristic.');
     } else {
       put('watch-detail', (watch.reason || 'No comparison is available.') + '. Keep this tab visible or revisit it during weather so this browser profile can save NOAA issues. No refreshes occur while the tab is hidden or closed.');
       put('watch-source', (history.status === 'available' ? history.snapshots.length : 0) + ' NOAA issue' + ((history.snapshots?.length || 0) === 1 ? '' : 's') + ' stored in this browser profile · retained up to 14 days · clearing browser data clears the history.');
@@ -154,7 +154,7 @@
       put('screen-rise', '—'); put('season-threshold', threshold ? threshold.cfs + ' cfs' : '—'); put('rise-detail', 'No partial path is turned into a reassuring result.'); $('rise-progress').style.width = '0'; return;
     }
     const percent = Math.round(screen.percent), exceeded = screen.difference < 0;
-    badge('rise-status', 'Lab screen', exceeded ? 'caution' : 'neutral'); put('rise-percent', percent.toLocaleString('en-US'));
+    badge('rise-status', 'Experimental', exceeded ? 'caution' : 'neutral'); put('rise-percent', percent.toLocaleString('en-US'));
     put('rise-title', num(screen.projectedRise) + ' cfs largest rise versus the ' + screen.threshold.cfs + ' cfs ' + screen.threshold.label + ' number');
     put('screen-rise', num(screen.projectedRise) + ' cfs'); put('season-threshold', screen.threshold.cfs + ' cfs');
     put('rise-detail', (exceeded ? num(Math.abs(screen.difference)) + ' cfs above' : num(screen.difference) + ' cfs below') + ' the numeric line at the ' + screen.pointSource + ' point ' + date(screen.pointTime) + '. Rolling low ' + num(screen.baselineCfs) + ' cfs at ' + date(screen.baselineTime) + '. Gauge alignment ' + signed(screen.adjustment) + ' cfs. Not official status.');
