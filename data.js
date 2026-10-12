@@ -170,6 +170,42 @@
     if (!Number.isFinite(lon) || !Number.isFinite(lat)) throw Error(label + ' centroid unavailable');
     return { clean, lon, lat };
   }
+  function segmentsTouch(a, b, c, d) {
+    const orientation = (p, q, r) => {
+      const cross = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+      return Math.abs(cross) <= 1e-12 ? 0 : Math.sign(cross);
+    };
+    const o1 = orientation(a, b, c), o2 = orientation(a, b, d), o3 = orientation(c, d, a), o4 = orientation(c, d, b);
+    return (o1 * o2 < 0 && o3 * o4 < 0) || (o1 === 0 && pointOnSegment(c, a, b)) || (o2 === 0 && pointOnSegment(d, a, b)) || (o3 === 0 && pointOnSegment(a, c, d)) || (o4 === 0 && pointOnSegment(b, c, d));
+  }
+  function ringsTouch(first, second) {
+    for (let a = 0; a < first.length - 1; a++) {
+      for (let b = 0; b < second.length - 1; b++) {
+        if (segmentsTouch(first[a], first[a + 1], second[b], second[b + 1])) return true;
+      }
+    }
+    return false;
+  }
+  function validateBasinTopology(polygons) {
+    for (const polygon of polygons) {
+      const outer = polygon[0], holes = polygon.slice(1);
+      for (let index = 0; index < holes.length; index++) {
+        const hole = holes[index];
+        if (hole.slice(0, -1).some(point => pointInRing(point, outer) !== 1) || ringsTouch(hole, outer)) throw Error('Basin hole is not strictly inside its outer ring');
+        for (let prior = 0; prior < index; prior++) {
+          const other = holes[prior];
+          if (ringsTouch(hole, other) || pointInRing(hole[0], other) !== 0 || pointInRing(other[0], hole) !== 0) throw Error('Basin holes overlap, touch, or nest');
+        }
+      }
+    }
+    for (let index = 0; index < polygons.length; index++) {
+      const outer = polygons[index][0];
+      for (let prior = 0; prior < index; prior++) {
+        const other = polygons[prior][0];
+        if (ringsTouch(outer, other) || pointInRing(outer[0], other) !== 0 || pointInRing(other[0], outer) !== 0) throw Error('Basin polygons overlap, touch, or contain one another');
+      }
+    }
+  }
   function basinGeometry(d) {
     if (!Array.isArray(d?.features) || d.features.length !== 1) throw Error('Basin response not recognized');
     const geometry = d.features[0]?.geometry;
@@ -189,6 +225,7 @@
       }
       validatedPolygons.push(validatedRings);
     }
+    validateBasinTopology(validatedPolygons);
     return { rings, polygons: validatedPolygons, pointCount };
   }
   function gaugePoint(d) {
@@ -200,7 +237,8 @@
     return lon !== null && lat !== null && lon >= -125 && lon <= -120 && lat >= 46 && lat <= 50 ? { lon, lat } : null;
   }
   function gridPoint(d) {
-    const coordinates = d?.geometry?.type === 'Polygon' ? d.geometry.coordinates?.[0] : null;
+    const polygons = d?.geometry?.coordinates;
+    const coordinates = d?.geometry?.type === 'Polygon' && Array.isArray(polygons) && polygons.length === 1 ? polygons[0] : null;
     try {
       const metrics = ringMetrics(coordinates, 'Forecast grid');
       if (!convexQuadrilateral(metrics.clean)) throw Error('Forecast grid is not a convex four-corner cell');

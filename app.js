@@ -122,6 +122,8 @@
     svg.innerHTML = '<title>Gauge-upstream drainage reference overlay</title><desc>' + description + '</desc>' + (paths ? '<path class="basin-shape" fill-rule="evenodd" d="' + paths + '"><title>Simplified drainage area upstream of gauge 12201500 from the USGS Network Linked Data Index</title></path>' : '') + markers.map(marker => { const p = projectRadarPoint(marker.lon, marker.lat), rightSide = p.x > 470, textX = rightSide ? -14 : 14, anchor = rightSide ? 'end' : 'start'; return '<g class="' + marker.cls + '" transform="translate(' + p.x.toFixed(1) + ' ' + p.y.toFixed(1) + ')"><circle r="9"></circle><text x="' + textX + '" y="' + marker.labelY + '" text-anchor="' + anchor + '">' + esc(marker.label) + '</text></g>'; }).join('');
     svg.setAttribute('aria-label', paths ? 'Simplified gauge-upstream drainage reference with Burlington river gauge and available forecast rain points' : 'Gauge-upstream drainage outline unavailable; Burlington river gauge and available forecast rain points only');
     svg.dataset.basin = paths ? 'available' : 'unavailable';
+    $('radar-basin-note').hidden = !!paths;
+    put('radar-basin-note', paths ? '' : 'Drainage outline unavailable; forecast-rain points were withheld because their grid cells could not be checked. Radar remains independent.');
     const image = $('radar-loop');
     if (radar.imageError || radar.error) markRadarImageUnavailable(image);
     else if (radar.validTime) image.alt = RADAR_PRODUCTS[radar.product].label + ' from National Weather Service KATX, valid ' + date(radar.validTime) + (paths ? ', with the simplified drainage area upstream of gauge 12201500 outlined.' : '. The gauge-upstream drainage outline is unavailable.');
@@ -355,10 +357,10 @@
     }
     const percent = Math.round(screen.percent), relation = D.lineRelation(screen.difference), exceeded = relation.code === 'above';
     badge('rise-status', 'Experimental', exceeded ? 'caution' : 'neutral'); put('rise-percent', percent.toLocaleString('en-US'));
-    put('rise-title', num(screen.riseAtHighestShare) + ' cfs rise at the highest seasonal share versus the ' + screen.threshold.cfs + ' cfs ' + screen.threshold.label + ' number');
+    put('rise-title', 'Largest relative rise: ' + num(screen.riseAtHighestShare) + ' cfs, or ' + percent.toLocaleString('en-US') + '% of the ' + screen.threshold.cfs + ' cfs ' + screen.threshold.label + ' reference.');
     put('screen-rise', num(screen.riseAtHighestShare) + ' cfs'); put('season-threshold', screen.threshold.cfs + ' cfs');
     const relationText = relation.code === 'at' ? 'At the numeric line' : num(relation.distance) + ' cfs ' + relation.code + ' the numeric line';
-    put('rise-detail', relationText + ' at the ' + screen.pointSource + ' point ' + date(screen.pointTime) + '. This point has the highest rise divided by its applicable seasonal number; it may not be the largest raw rise when that number changes. Rolling low ' + num(screen.baselineCfs) + ' cfs at ' + date(screen.baselineTime) + '. Gauge alignment ' + signed(screen.adjustment) + ' cfs. Not official status.');
+    put('rise-detail', relationText + ' at the ' + screen.pointSource + ' point ' + date(screen.pointTime) + '. This point has the largest rise relative to the seasonal reference in effect at that time; a larger raw rise may exist when the reference changes. Rolling low ' + num(screen.baselineCfs) + ' cfs at ' + date(screen.baselineTime) + '. Gauge alignment ' + signed(screen.adjustment) + ' cfs. Not official status.');
     $('rise-progress').style.width = Math.min(100, Math.max(0, screen.percent)) + '%';
     $('rise-progress').style.background = exceeded ? 'var(--coral)' : 'var(--teal)';
   }

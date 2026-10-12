@@ -87,6 +87,7 @@ with sync_playwright() as p:
     errors = []
     page.on('pageerror', lambda e: errors.append(str(e)))
     payload = fixtures()
+    original_forecast = json.loads(json.dumps(payload['nwps']['forecast']))
     mode = {'fail': False, 'direct_fail': False, 'radar_fail': False, 'radar_layer_fail': None, 'radar_legend_fail': False, 'rrm_fail': False, 'basin_fail': False, 'basin_malformed_once': False, 'grid_geometry_fail': False, 'grid_outside_basin': False}
 
     def route(req):
@@ -230,10 +231,18 @@ with sync_playwright() as p:
       threw=false;try{D.basinGeometry({features:[{geometry:{type:'Polygon',coordinates:[[[-122.4,48.5],[-122.2,48.5],[-122.2,48.7],[-122.3,48.6]]]}}]})}catch{threw=true}check(threw,'open basin ring rejected');
       threw=false;try{D.basinGeometry({features:[{geometry:{type:'Polygon',coordinates:[[[-122.4,48.5],[-122.4,48.5],[-122.4,48.5],[-122.4,48.5]]]}}]})}catch{threw=true}check(threw,'zero-area basin ring rejected');
       threw=false;try{D.basinGeometry({features:[{geometry:{type:'Polygon',coordinates:[[[-122.5,48.5],[-122.3,48.7],[-122.5,48.7],[-122.4,48.5],[-122.5,48.5]]]}}]})}catch{threw=true}check(threw,'self-intersecting basin ring rejected');
+      threw=false;try{D.basinGeometry({features:[{geometry:{type:'Polygon',coordinates:[[[-122.5,48.3],[-122.1,48.3],[-122.1,48.7],[-122.5,48.7],[-122.5,48.3]],[[-122.55,48.45],[-122.3,48.45],[-122.3,48.55],[-122.55,48.55],[-122.55,48.45]]]}}]})}catch{threw=true}check(threw,'basin hole crossing outer ring rejected');
+      threw=false;try{D.basinGeometry({features:[{geometry:{type:'Polygon',coordinates:[[[-122.5,48.3],[-122.1,48.3],[-122.1,48.7],[-122.5,48.7],[-122.5,48.3]],[[-122.0,48.45],[-121.9,48.45],[-121.9,48.55],[-122.0,48.55],[-122.0,48.45]]]}}]})}catch{threw=true}check(threw,'basin hole outside outer ring rejected');
+      threw=false;try{D.basinGeometry({features:[{geometry:{type:'Polygon',coordinates:[[[-122.5,48.3],[-122.1,48.3],[-122.1,48.7],[-122.5,48.7],[-122.5,48.3]],[[-122.4,48.4],[-122.25,48.4],[-122.25,48.55],[-122.4,48.55],[-122.4,48.4]],[[-122.35,48.45],[-122.2,48.45],[-122.2,48.6],[-122.35,48.6],[-122.35,48.45]]]}}]})}catch{threw=true}check(threw,'overlapping basin holes rejected');
+      threw=false;try{D.basinGeometry({features:[{geometry:{type:'Polygon',coordinates:[[[-122.5,48.3],[-122.1,48.3],[-122.1,48.7],[-122.5,48.7],[-122.5,48.3]],[[-122.4,48.4],[-122.2,48.4],[-122.2,48.6],[-122.4,48.6],[-122.4,48.4]],[[-122.35,48.45],[-122.25,48.45],[-122.25,48.55],[-122.35,48.55],[-122.35,48.45]]]}}]})}catch{threw=true}check(threw,'nested basin holes rejected');
+      threw=false;try{D.basinGeometry({features:[{geometry:{type:'MultiPolygon',coordinates:[[[[-122.5,48.3],[-122.2,48.3],[-122.2,48.6],[-122.5,48.6],[-122.5,48.3]]],[[[-122.3,48.4],[-122.1,48.4],[-122.1,48.7],[-122.3,48.7],[-122.3,48.4]]]]}}]})}catch{threw=true}check(threw,'overlapping basin polygons rejected');
+      threw=false;try{D.basinGeometry({features:[{geometry:{type:'MultiPolygon',coordinates:[[[[-122.5,48.3],[-122.1,48.3],[-122.1,48.7],[-122.5,48.7],[-122.5,48.3]]],[[[-122.4,48.4],[-122.2,48.4],[-122.2,48.6],[-122.4,48.6],[-122.4,48.4]]]]}}]})}catch{threw=true}check(threw,'contained basin polygon rejected');
+      const splitBasin=D.basinGeometry({features:[{geometry:{type:'MultiPolygon',coordinates:[[[[-122.5,48.3],[-122.35,48.3],[-122.35,48.45],[-122.5,48.45],[-122.5,48.3]]],[[[-122.25,48.55],[-122.1,48.55],[-122.1,48.7],[-122.25,48.7],[-122.25,48.55]]]]}}]});check(splitBasin.polygons.length===2,'separate basin polygons accepted');
       const gp=D.gridPoint({geometry:{type:'Polygon',coordinates:[[[-122.4,48.5],[-122.2,48.5],[-122.2,48.7],[-122.4,48.7],[-122.4,48.5]]]}});check(Math.abs(gp.lon+122.3)<1e-8&&Math.abs(gp.lat-48.6)<1e-8,'forecast grid centroid');
       check(D.gridPoint({geometry:{type:'Polygon',coordinates:[[[-122.4,48.5],[-122.2,48.5],[-122.2,48.7],[-122.4,48.7]]]}})===null,'open forecast grid rejected');
       check(D.gridPoint({geometry:{type:'Polygon',coordinates:[[[-122.4,48.5],[-122.4,48.5],[-122.4,48.5],[-122.4,48.5]]]}})===null,'zero-area forecast grid rejected');
       check(D.gridPoint({geometry:{type:'Polygon',coordinates:[[[-122.5,48.5],[-122.3,48.7],[-122.5,48.7],[-122.4,48.5],[-122.5,48.5]]]}})===null,'self-intersecting forecast grid rejected');
+      check(D.gridPoint({geometry:{type:'Polygon',coordinates:[[[-122.4,48.5],[-122.2,48.5],[-122.2,48.7],[-122.4,48.7],[-122.4,48.5]],[[-122.35,48.55],[-122.25,48.55],[-122.25,48.65],[-122.35,48.65],[-122.35,48.55]]]}})===null,'forecast grid with interior ring rejected');
       const boxBasin=D.basinGeometry({features:[{geometry:{type:'Polygon',coordinates:[[[-122.5,48.3],[-122.1,48.3],[-122.1,48.7],[-122.5,48.7],[-122.5,48.3]]]}}]});
       check(D.gridCellWithinBasin(gp,boxBasin),'full forecast grid inside basin');
       const outsideGrid=D.gridPoint({geometry:{type:'Polygon',coordinates:[[[-122.09,48.5],[-122.05,48.5],[-122.05,48.6],[-122.09,48.6],[-122.09,48.5]]]}});check(!D.gridCellWithinBasin(outsideGrid,boxBasin),'out-of-basin forecast grid rejected');
@@ -380,12 +389,15 @@ with sync_playwright() as p:
     assert page.locator('#radar-overlay .basin-shape').count() == 1
     assert page.locator('#radar-overlay .gauge-marker').count() == 1
     assert page.locator('#radar-overlay .rain-marker').count() == 2
+    assert page.locator('#radar-basin-note').is_hidden()
     assert page.locator('#radar-overlay .rain-marker text').evaluate_all("els => { const a=els[0].getBoundingClientRect(), b=els[1].getBoundingClientRect(); return a.bottom <= b.top || b.bottom <= a.top || a.right <= b.left || b.right <= a.left; }")
     assert 'valid' in page.locator('#radar-frame-time').inner_text()
     assert page.locator('#ops-flow').inner_text() == '101'
     assert page.locator('#ops-threshold').inner_text().endswith('cfs')
     assert page.locator('#flow-chart').evaluate("el => el.getBoundingClientRect().top < document.getElementById('surprise-watch').getBoundingClientRect().top")
     assert page.locator('#radar-loop').evaluate("el => el.getBoundingClientRect().top < document.getElementById('surprise-watch').getBoundingClientRect().top")
+    assert page.locator('#rise-title').inner_text().startswith('Largest relative rise:')
+    assert 'largest rise relative to the seasonal reference' in page.locator('#rise-detail').inner_text().lower()
     assert page.locator('#saved-path-legend').is_hidden()
     assert page.locator('#flow-chart path[stroke="var(--saved)"]').count() == 0
     # A numerically available three-hour pair is not operationally current when
@@ -741,6 +753,7 @@ with sync_playwright() as p:
     mode['direct_fail'] = False
     payload['rain']['properties']['updateTime'] = ISO(-1)
     payload['rain']['properties']['quantitativePrecipitation']['values'][0]['value'] = 5.08
+    payload['nwps']['forecast'] = json.loads(json.dumps(original_forecast))
 
     # Without the reference basin, the page cannot substantiate containment, so
     # it keeps the river but withholds both forecast-rain points and their mean.
@@ -758,6 +771,10 @@ with sync_playwright() as p:
     assert basin_page.locator('#rain-total').inner_text() == '—'
     assert basin_page.locator('#radar-overlay .rain-marker').count() == 0
     assert 'shown only after' in basin_page.locator('#rain-note').inner_text().lower()
+    assert basin_page.locator('#radar-basin-note').is_visible()
+    assert 'forecast-rain points were withheld' in basin_page.locator('#radar-basin-note').inner_text().lower()
+    assert 'radar remains independent' in basin_page.locator('#radar-basin-note').inner_text().lower()
+    assert basin_page.locator('#forecast-high').inner_text() != '—'
     basin_page.screenshot(path=str(out / 'basin-unavailable.png'), full_page=True)
     if axe_path:
         basin_page.add_script_tag(path=axe_path)
@@ -769,6 +786,7 @@ with sync_playwright() as p:
     basin_page.wait_for_function("!document.getElementById('refresh').disabled")
     assert basin_page.locator('#radar-overlay .basin-shape').count() == 1
     assert basin_page.locator('#radar-overlay .rain-marker').count() == 2
+    assert basin_page.locator('#radar-basin-note').is_hidden()
     assert basin_page.locator('#rain-total').inner_text() == '0.80', basin_page.locator('#source-status').inner_text()
     basin_page.close()
 

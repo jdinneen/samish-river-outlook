@@ -98,13 +98,15 @@ requests with deterministic fixtures. An explicit local URL is also accepted.
 For the required accessibility pass, set `AXE_PATH` to an axe-core 4.13.0 browser
 bundle and `REQUIRE_AXE=1`.
 
-The suite covers 135 numerical contracts, including Pacific-time seasonal
+The suite covers 143 numerical contracts, including Pacific-time seasonal
 boundaries; strict river-history and forecast support; first-capture immutability;
 six-hour rain mass and missing coverage; Seattle rain-report zero, missing,
 monotonic-window, age, index/payload-clock and exact-row identity handling; radar
 capability clocks; closed, nondegenerate, non-self-intersecting basin and grid geometry;
-full grid-cell containment across concave boundaries and holes, including boundary-touching holes and rejection of unexpected non-quadrilateral cells; seasonal-boundary
-selection by share rather than raw rise;
+valid shell, hole and multi-polygon relationships; full grid-cell containment across concave
+boundaries and holes, including boundary-touching holes and rejection of cells with unexpected
+interior rings or non-quadrilateral shapes; seasonal-boundary
+selection by relative rise rather than raw rise;
 stale river-change rejection; storm-record validation; and CSV formula neutralization.
 
 Browser checks cover all radar products, exact product time, official-legend failure,
