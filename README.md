@@ -6,11 +6,10 @@ Buildless HTML, CSS and JavaScript. Each browser requests public river, forecast
 rain, radar, gauge-upstream drainage-area and tide sources directly. There is no runtime package,
 tracking, account, backend, automated alert or background monitor.
 
-The source currently contains the version 5 candidate. It is not public merely
-because it is committed: `version.json` remains the receipt for the published
-version 4 until a separate release is requested and verified.
+The source contains published version 5. `version.json` is the machine-readable
+receipt that binds the public release to its asset commit and file hashes.
 
-## Version 5 candidate
+## Version 5
 
 Version 5 keeps the earlier evidence boundaries and makes the page more useful
 during a storm:
@@ -42,7 +41,9 @@ during a storm:
   of Health formula. It uses one constant gauge alignment, a strictly earlier
   rolling 24-hour low, and the confirmed seasonal numbers: 400 cubic feet per
   second (cfs) in November–February, 200 cfs in March–April, and 100 cfs in
-  May–October. Incomplete gauge or forecast support withholds the result.
+  May–October. It reports the rise with the highest share of the seasonal number
+  that applies at that point; across a seasonal boundary, this may differ from
+  the largest raw rise. Incomplete gauge or forecast support withholds the result.
 - The saved-path comparison stores the first capture of each NOAA issue in that
   browser profile for up to 14 days. Its unvalidated 10% comparison line is a
   measuring rule—not a closure probability, alert, dispatch recommendation or
@@ -50,10 +51,11 @@ during a storm:
 - Forecast rain comes from two National Weather Service (NWS) grid points. The
   headline is their mean only when both fully cover the next 24 hours. The chart
   uses six-hour blocks. Amounts crossing a block boundary are apportioned
-  uniformly; actual timing inside the interval can differ. The complete polygons
-  for grids SEW 136,114 and SEW 139,116 were checked inside the displayed
-  gauge-upstream drainage reference. They are still point forecasts, not an area
-  average. Invalid or missing grid geometry withholds that point; missing is never zero.
+  uniformly; actual timing inside the interval can differ. On every refresh, the
+  complete convex four-corner polygons for grids SEW 136,114 and SEW 139,116 must be verified inside
+  the current displayed gauge-upstream drainage reference. They are still point
+  forecasts, not an area average. Invalid, missing or out-of-reference grid
+  geometry—or unavailable reference geometry—withholds that point; missing is never zero.
 - The Seattle NWS rain report contains provisional automated-station rolling totals
   for 1, 3, 6, 12, 24, 48 and 72 hours. It is not an hourly history, a basin average
   or ground truth at either forecast point. The page never subtracts the unlike
@@ -64,7 +66,8 @@ during a storm:
 - The USGS Network Linked Data Index supplies a simplified drainage area upstream
   of gauge 12201500, based on whole NHDPlusV2 catchments. It is not the full Samish
   watershed. The outline is a display reference, not a property, harvest-area or
-  regulatory boundary, and drives no calculation.
+  regulatory boundary. It gates whether each rain point can be displayed but does
+  not change any precipitation amount.
 - Tide extrema are NOAA predictions in feet relative to mean lower low water at
   Bellingham, not Samish Bay water levels or access clearance.
 - The page attempts automatic refresh only while it is open, visible and the device
@@ -95,15 +98,18 @@ requests with deterministic fixtures. An explicit local URL is also accepted.
 For the required accessibility pass, set `AXE_PATH` to an axe-core 4.13.0 browser
 bundle and `REQUIRE_AXE=1`.
 
-The suite covers 128 numerical contracts, including Pacific-time seasonal
+The suite covers 135 numerical contracts, including Pacific-time seasonal
 boundaries; strict river-history and forecast support; first-capture immutability;
 six-hour rain mass and missing coverage; Seattle rain-report zero, missing,
 monotonic-window, age, index/payload-clock and exact-row identity handling; radar
 capability clocks; closed, nondegenerate, non-self-intersecting basin and grid geometry;
+full grid-cell containment across concave boundaries and holes, including boundary-touching holes and rejection of unexpected non-quadrilateral cells; seasonal-boundary
+selection by share rather than raw rise;
 stale river-change rejection; storm-record validation; and CSV formula neutralization.
 
 Browser checks cover all radar products, exact product time, official-legend failure,
-gauge-upstream overlay and retry, rain-grid geometry failure, rain chart and table,
+gauge-upstream overlay and retry, missing and out-of-reference rain-grid geometry,
+rain chart and table,
 event-log save/reload/export/delete/clear,
 storage denial and corruption, reduced motion, source-specific failures, total-feed
 failure, keyboard tabs, clipboard fallback, and horizontal overflow at 320, 390,

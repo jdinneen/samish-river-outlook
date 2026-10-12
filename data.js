@@ -176,17 +176,20 @@
     const polygons = geometry?.type === 'Polygon' ? [geometry.coordinates] : geometry?.type === 'MultiPolygon' ? geometry.coordinates : null;
     if (!Array.isArray(polygons) || !polygons.length) throw Error('Basin geometry unavailable');
     let pointCount = 0;
-    const rings = [];
+    const rings = [], validatedPolygons = [];
     for (const polygon of polygons) {
       if (!Array.isArray(polygon) || !polygon.length) throw Error('Basin polygon malformed');
+      const validatedRings = [];
       for (const ring of polygon) {
         const clean = ringMetrics(ring, 'Basin').clean;
         pointCount += clean.length;
         if (pointCount > 5000) throw Error('Basin geometry is unexpectedly large');
         rings.push(clean);
+        validatedRings.push(clean);
       }
+      validatedPolygons.push(validatedRings);
     }
-    return { rings, pointCount };
+    return { rings, polygons: validatedPolygons, pointCount };
   }
   function gaugePoint(d) {
     if (!Array.isArray(d?.features)) return null;
@@ -200,8 +203,84 @@
     const coordinates = d?.geometry?.type === 'Polygon' ? d.geometry.coordinates?.[0] : null;
     try {
       const metrics = ringMetrics(coordinates, 'Forecast grid');
-      return { lon: metrics.lon, lat: metrics.lat };
+      if (!convexQuadrilateral(metrics.clean)) throw Error('Forecast grid is not a convex four-corner cell');
+      return { lon: metrics.lon, lat: metrics.lat, ring: metrics.clean };
     } catch { return null; }
+  }
+  function convexQuadrilateral(ring) {
+    if (!Array.isArray(ring) || ring.length !== 5) return false;
+    const vertices = ring.slice(0, -1);
+    let direction = 0;
+    for (let i = 0; i < vertices.length; i++) {
+      const a = vertices[i], b = vertices[(i + 1) % vertices.length], c = vertices[(i + 2) % vertices.length];
+      const cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+      if (Math.abs(cross) <= 1e-12) return false;
+      const current = Math.sign(cross);
+      if (direction && current !== direction) return false;
+      direction = current;
+    }
+    return true;
+  }
+  function pointOnSegment(point, a, b) {
+    const cross = (point[0] - a[0]) * (b[1] - a[1]) - (point[1] - a[1]) * (b[0] - a[0]);
+    return Math.abs(cross) <= 1e-10 && point[0] >= Math.min(a[0], b[0]) - 1e-10 && point[0] <= Math.max(a[0], b[0]) + 1e-10 && point[1] >= Math.min(a[1], b[1]) - 1e-10 && point[1] <= Math.max(a[1], b[1]) + 1e-10;
+  }
+  function pointInRing(point, ring) {
+    let inside = false;
+    for (let i = 0; i < ring.length - 1; i++) {
+      const a = ring[i], b = ring[i + 1];
+      if (pointOnSegment(point, a, b)) return 2;
+      if ((a[1] > point[1]) !== (b[1] > point[1]) && point[0] < (b[0] - a[0]) * (point[1] - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
+    }
+    return inside ? 1 : 0;
+  }
+  function pointCoveredByPolygon(point, polygon) {
+    if (!Array.isArray(polygon) || !polygon.length || pointInRing(point, polygon[0]) === 0) return false;
+    return polygon.slice(1).every(hole => pointInRing(point, hole) !== 1);
+  }
+  function intersectionParameters(a, b, c, d) {
+    const rx = b[0] - a[0], ry = b[1] - a[1], sx = d[0] - c[0], sy = d[1] - c[1];
+    const cross = (x1, y1, x2, y2) => x1 * y2 - y1 * x2;
+    const denominator = cross(rx, ry, sx, sy), qx = c[0] - a[0], qy = c[1] - a[1];
+    if (Math.abs(denominator) > 1e-12) {
+      const t = cross(qx, qy, sx, sy) / denominator, u = cross(qx, qy, rx, ry) / denominator;
+      return t >= -1e-10 && t <= 1 + 1e-10 && u >= -1e-10 && u <= 1 + 1e-10 ? [Math.min(1, Math.max(0, t))] : [];
+    }
+    if (Math.abs(cross(qx, qy, rx, ry)) > 1e-12) return [];
+    const lengthSquared = rx * rx + ry * ry;
+    if (lengthSquared <= 1e-20) return [];
+    return [((c[0] - a[0]) * rx + (c[1] - a[1]) * ry) / lengthSquared, ((d[0] - a[0]) * rx + (d[1] - a[1]) * ry) / lengthSquared]
+      .filter(t => t >= -1e-10 && t <= 1 + 1e-10).map(t => Math.min(1, Math.max(0, t)));
+  }
+  function gridWithinPolygon(grid, polygon) {
+    const ring = grid.ring;
+    if (ring.slice(0, -1).some(point => !pointCoveredByPolygon(point, polygon))) return false;
+    const centroid = [grid.lon, grid.lat];
+    if (pointInRing(centroid, ring) !== 0 && !pointCoveredByPolygon(centroid, polygon)) return false;
+    for (let edge = 0; edge < ring.length - 1; edge++) {
+      const a = ring[edge], b = ring[edge + 1], parameters = [0, 1];
+      for (const boundary of polygon) {
+        for (let i = 0; i < boundary.length - 1; i++) parameters.push(...intersectionParameters(a, b, boundary[i], boundary[i + 1]));
+      }
+      const unique = [...new Set(parameters.map(value => value.toFixed(12)))].map(Number).sort((x, y) => x - y);
+      for (let i = 1; i < unique.length; i++) {
+        if (unique[i] - unique[i - 1] <= 1e-10) continue;
+        const t = (unique[i] + unique[i - 1]) / 2;
+        if (!pointCoveredByPolygon([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], polygon)) return false;
+      }
+    }
+    for (const hole of polygon.slice(1)) {
+      if (hole.slice(0, -1).some(point => pointInRing(point, ring) === 1)) return false;
+      for (let i = 0; i < hole.length - 1; i++) {
+        const midpoint = [(hole[i][0] + hole[i + 1][0]) / 2, (hole[i][1] + hole[i + 1][1]) / 2];
+        if (pointInRing(midpoint, ring) === 1) return false;
+      }
+    }
+    return true;
+  }
+  function gridCellWithinBasin(grid, basin) {
+    if (!convexQuadrilateral(grid?.ring) || !Number.isFinite(grid.lon) || !Number.isFinite(grid.lat) || !Array.isArray(basin?.polygons)) return false;
+    return basin.polygons.some(polygon => gridWithinPolygon(grid, polygon));
   }
   function radarCapabilities(xmlText, now) {
     if (typeof xmlText !== 'string' || xmlText.length > 2000000 || !Number.isFinite(now) || typeof DOMParser === 'undefined') throw Error('Radar capabilities unavailable');
@@ -343,7 +422,8 @@
     const selected = candidates.reduce((best, r) => r.ratio > best.ratio ? r : best);
     return {
       usable: true,
-      projectedRise: selected.rise,
+      riseAtHighestShare: selected.rise,
+      selectionBasis: 'highest-seasonal-reference-share',
       percent: selected.ratio * 100,
       difference: selected.threshold.cfs - selected.rise,
       threshold: selected.threshold,
@@ -468,5 +548,5 @@
     return d.predictions.filter(r => /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(r.t)).map(r => ({ t: time(String(r.t).replace(' ', 'T') + ':00Z'), v: number(r.v), type: r.type }))
       .filter(r => r.t !== null && r.v !== null && ['H', 'L'].includes(r.type)).sort((a, b) => a.t - b.t);
   }
-  root.SamishData = { H, WATCH, number, time, nwpsSeries, usgs, duration, rain, rainWindow, rainBins, rrmProductId, rrmRain, basinGeometry, gaugePoint, gridPoint, radarCapabilities, csvCell, stormRecord, stormCsv, interpolate, atBefore, thresholdAt, recentChange, planningScreen, lineRelation, makeSnapshot, surpriseWatch, forecastRevision, forecast, tides };
+  root.SamishData = { H, WATCH, number, time, nwpsSeries, usgs, duration, rain, rainWindow, rainBins, rrmProductId, rrmRain, basinGeometry, gaugePoint, gridPoint, gridCellWithinBasin, radarCapabilities, csvCell, stormRecord, stormCsv, interpolate, atBefore, thresholdAt, recentChange, planningScreen, lineRelation, makeSnapshot, surpriseWatch, forecastRevision, forecast, tides };
 })(globalThis);

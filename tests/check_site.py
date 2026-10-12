@@ -87,7 +87,7 @@ with sync_playwright() as p:
     errors = []
     page.on('pageerror', lambda e: errors.append(str(e)))
     payload = fixtures()
-    mode = {'fail': False, 'direct_fail': False, 'radar_fail': False, 'radar_layer_fail': None, 'radar_legend_fail': False, 'rrm_fail': False, 'basin_fail': False, 'basin_malformed_once': False, 'grid_geometry_fail': False}
+    mode = {'fail': False, 'direct_fail': False, 'radar_fail': False, 'radar_layer_fail': None, 'radar_legend_fail': False, 'rrm_fail': False, 'basin_fail': False, 'basin_malformed_once': False, 'grid_geometry_fail': False, 'grid_outside_basin': False}
 
     def route(req):
         u = req.request.url
@@ -127,6 +127,10 @@ with sync_playwright() as p:
         if 'api.weather.gov/gridpoints/' in u and mode['grid_geometry_fail']:
             bad_grid = json.loads(json.dumps(payload['rain']))
             bad_grid.pop('geometry', None)
+            return req.fulfill(status=200, content_type='application/json', body=json.dumps(bad_grid), headers={'Access-Control-Allow-Origin': '*'})
+        if 'api.weather.gov/gridpoints/SEW/139,116' in u and mode['grid_outside_basin']:
+            bad_grid = json.loads(json.dumps(payload['rain']))
+            bad_grid['geometry'] = {'type': 'Polygon', 'coordinates': [[[-122.13, 48.58], [-122.09, 48.58], [-122.09, 48.61], [-122.13, 48.61], [-122.13, 48.58]]]}
             return req.fulfill(status=200, content_type='application/json', body=json.dumps(bad_grid), headers={'Access-Control-Allow-Origin': '*'})
         key = 'nwps' if '/nwps/' in u else 'usgs' if 'waterdata.usgs.gov' in u else 'rain' if 'api.weather.gov/gridpoints/' in u else 'tides'
         req.fulfill(status=200, content_type='application/json', body=json.dumps(payload[key]), headers={'Access-Control-Allow-Origin': '*'})
@@ -230,6 +234,15 @@ with sync_playwright() as p:
       check(D.gridPoint({geometry:{type:'Polygon',coordinates:[[[-122.4,48.5],[-122.2,48.5],[-122.2,48.7],[-122.4,48.7]]]}})===null,'open forecast grid rejected');
       check(D.gridPoint({geometry:{type:'Polygon',coordinates:[[[-122.4,48.5],[-122.4,48.5],[-122.4,48.5],[-122.4,48.5]]]}})===null,'zero-area forecast grid rejected');
       check(D.gridPoint({geometry:{type:'Polygon',coordinates:[[[-122.5,48.5],[-122.3,48.7],[-122.5,48.7],[-122.4,48.5],[-122.5,48.5]]]}})===null,'self-intersecting forecast grid rejected');
+      const boxBasin=D.basinGeometry({features:[{geometry:{type:'Polygon',coordinates:[[[-122.5,48.3],[-122.1,48.3],[-122.1,48.7],[-122.5,48.7],[-122.5,48.3]]]}}]});
+      check(D.gridCellWithinBasin(gp,boxBasin),'full forecast grid inside basin');
+      const outsideGrid=D.gridPoint({geometry:{type:'Polygon',coordinates:[[[-122.09,48.5],[-122.05,48.5],[-122.05,48.6],[-122.09,48.6],[-122.09,48.5]]]}});check(!D.gridCellWithinBasin(outsideGrid,boxBasin),'out-of-basin forecast grid rejected');
+      const concaveBasin=D.basinGeometry({features:[{geometry:{type:'Polygon',coordinates:[[[-122.5,48.3],[-122.1,48.3],[-122.1,48.7],[-122.2,48.7],[-122.2,48.4],[-122.4,48.4],[-122.4,48.7],[-122.5,48.7],[-122.5,48.3]]]}}]});
+      const bridgeGrid=D.gridPoint({geometry:{type:'Polygon',coordinates:[[[-122.45,48.6],[-122.15,48.6],[-122.15,48.65],[-122.45,48.65],[-122.45,48.6]]]}});check(!D.gridCellWithinBasin(bridgeGrid,concaveBasin),'grid edge crossing concave basin gap rejected');
+      const holeBasin=D.basinGeometry({features:[{geometry:{type:'Polygon',coordinates:[[[-122.5,48.3],[-122.1,48.3],[-122.1,48.7],[-122.5,48.7],[-122.5,48.3]],[[-122.35,48.45],[-122.25,48.45],[-122.25,48.55],[-122.35,48.55],[-122.35,48.45]]]}}]});
+      const holeCoveringGrid=D.gridPoint({geometry:{type:'Polygon',coordinates:[[[-122.4,48.4],[-122.2,48.4],[-122.2,48.6],[-122.4,48.6],[-122.4,48.4]]]}});check(!D.gridCellWithinBasin(holeCoveringGrid,holeBasin),'grid covering basin hole rejected');
+      const boundaryHoleBasin=D.basinGeometry({features:[{geometry:{type:'Polygon',coordinates:[[[-122.5,48.3],[-122.1,48.3],[-122.1,48.7],[-122.5,48.7],[-122.5,48.3]],[[-122.4,48.45],[-122.3,48.4],[-122.2,48.45],[-122.4,48.45]]]}}]});check(!D.gridCellWithinBasin(holeCoveringGrid,boundaryHoleBasin),'basin hole with vertices on grid boundary rejected');
+      const concaveGrid=D.gridPoint({geometry:{type:'Polygon',coordinates:[[[-122.27,48.47],[-122.06,48.5],[-122.27,48.53],[-122.3,48.54],[-122.33,48.53],[-122.34,48.5],[-122.33,48.47],[-122.3,48.46],[-122.27,48.47]]]}});check(concaveGrid===null,'non-quadrilateral concave forecast cell rejected');
       const radarXml='<?xml version="1.0"?><WMS_Capabilities xmlns="http://www.opengis.net/wms"><Capability><Layer>'+['katx_sr_bref','katx_boha','katx_bdsa'].map(layer=>'<Layer><Name>'+layer+'</Name><Dimension name="time">'+iso(now-H)+','+iso(now)+'</Dimension></Layer>').join('')+'</Layer></Capability></WMS_Capabilities>';
       const caps=D.radarCapabilities(radarXml,now);check(caps.katx_sr_bref.latest===now&&caps.katx_boha.times.length===2,'radar capability times');
       threw=false;try{D.radarCapabilities(radarXml.replace('katx_bdsa','wrong_layer'),now)}catch{threw=true}check(threw,'missing radar product rejected');
@@ -258,8 +271,13 @@ with sync_playwright() as p:
       const obs=Array.from({length:25},(_,i)=>({t:now+(-24+i)*H,q:100}));
       const future=Array.from({length:13},(_,i)=>({t:now+i*6*H,q:i<=4?100+i*30:220}));
       let screen=D.planningScreen(obs,future,now);
-      check(screen.usable&&screen.projectedRise===120&&screen.baselineTime<screen.pointTime,'complete rise screen and strict earlier baseline');
+      check(screen.usable&&screen.riseAtHighestShare===120&&screen.selectionBasis==='highest-seasonal-reference-share'&&screen.baselineTime<screen.pointTime,'complete rise screen and strict earlier baseline');
       check(screen.threshold.cfs===D.thresholdAt(screen.pointTime).cfs,'candidate-time seasonal rule');
+      const boundaryNow=Date.parse('2026-10-31T07:00:00Z');
+      const boundaryObs=Array.from({length:25},(_,i)=>({t:boundaryNow+(-24+i)*H,q:100}));
+      const boundaryFuture=Array.from({length:13},(_,i)=>({t:boundaryNow+i*6*H,q:i===1?190:i>=4?400:100}));
+      const boundaryScreen=D.planningScreen(boundaryObs,boundaryFuture,boundaryNow);
+      check(boundaryScreen.usable&&boundaryScreen.riseAtHighestShare===90&&boundaryScreen.threshold.cfs===100&&Math.max(...boundaryFuture.map(r=>r.q))-100===300,'seasonal screen selects highest reference share, not largest raw rise');
       check(D.lineRelation(-1).code==='above'&&D.lineRelation(-1).distance===1,'seasonal line above relation');
       check(D.lineRelation(0).code==='at'&&D.lineRelation(0).distance===0,'seasonal line exact equality');
       check(D.lineRelation(1).code==='below'&&D.lineRelation(1).distance===1,'seasonal line below relation');
@@ -664,6 +682,19 @@ with sync_playwright() as p:
     page.locator('#refresh').click()
     page.wait_for_function("!document.getElementById('refresh').disabled")
     assert page.locator('#rain-total').inner_text() == '0.80'
+    # A well-formed cell outside the displayed drainage reference is withheld.
+    mode['grid_outside_basin'] = True
+    page.locator('#refresh').click()
+    page.wait_for_function("!document.getElementById('refresh').disabled")
+    assert page.locator('#rain-total').inner_text() == '—'
+    assert page.locator('#radar-overlay .rain-marker').count() == 1
+    assert 'not fully inside' in page.locator('#source-status').inner_text().lower()
+    assert 'shown only after' in page.locator('#rain-note').inner_text().lower()
+    page.screenshot(path=str(out / 'rain-grid-outside-basin.png'), full_page=True)
+    mode['grid_outside_basin'] = False
+    page.locator('#refresh').click()
+    page.wait_for_function("!document.getElementById('refresh').disabled")
+    assert page.locator('#rain-total').inner_text() == '0.80'
     # Preserve NOAA observations when the direct feed fails, and label the source honestly.
     mode['direct_fail'] = True
     page.locator('#refresh').click()
@@ -708,9 +739,11 @@ with sync_playwright() as p:
     page.screenshot(path=str(out / 'feeds-unavailable.png'), full_page=True)
     mode['fail'] = False
     mode['direct_fail'] = False
+    payload['rain']['properties']['updateTime'] = ISO(-1)
+    payload['rain']['properties']['quantitativePrecipitation']['values'][0]['value'] = 5.08
 
-    # A missing reference basin removes only the outline; source data and exact
-    # point markers remain usable and the page makes no geographic calculation.
+    # Without the reference basin, the page cannot substantiate containment, so
+    # it keeps the river but withholds both forecast-rain points and their mean.
     mode['basin_fail'] = True
     basin_page = context.new_page()
     basin_page.route('**/*', route)
@@ -722,6 +755,9 @@ with sync_playwright() as p:
     assert 'outline unavailable' in basin_page.locator('#radar-overlay').get_attribute('aria-label').lower()
     assert 'outline is unavailable' in basin_page.locator('#radar-loop').get_attribute('alt').lower()
     assert basin_page.locator('#flow').inner_text() == '101'
+    assert basin_page.locator('#rain-total').inner_text() == '—'
+    assert basin_page.locator('#radar-overlay .rain-marker').count() == 0
+    assert 'shown only after' in basin_page.locator('#rain-note').inner_text().lower()
     basin_page.screenshot(path=str(out / 'basin-unavailable.png'), full_page=True)
     if axe_path:
         basin_page.add_script_tag(path=axe_path)
@@ -732,6 +768,8 @@ with sync_playwright() as p:
     basin_page.locator('#refresh').click()
     basin_page.wait_for_function("!document.getElementById('refresh').disabled")
     assert basin_page.locator('#radar-overlay .basin-shape').count() == 1
+    assert basin_page.locator('#radar-overlay .rain-marker').count() == 2
+    assert basin_page.locator('#rain-total').inner_text() == '0.80', basin_page.locator('#source-status').inner_text()
     basin_page.close()
 
     # A syntactically successful but malformed basin response is also retried.
@@ -741,9 +779,11 @@ with sync_playwright() as p:
     basin_parse_page.goto(URL)
     basin_parse_page.wait_for_function("!document.getElementById('refresh').disabled")
     assert basin_parse_page.locator('#radar-overlay .basin-shape').count() == 0
+    assert basin_parse_page.locator('#rain-total').inner_text() == '—'
     basin_parse_page.locator('#refresh').click()
     basin_parse_page.wait_for_function("!document.getElementById('refresh').disabled")
     assert basin_parse_page.locator('#radar-overlay .basin-shape').count() == 1
+    assert basin_parse_page.locator('#rain-total').inner_text() == '0.80'
     basin_parse_page.close()
 
     # Browser storage denial disables only the local record and comparison tools.

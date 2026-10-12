@@ -217,16 +217,17 @@
     const merged = [...new Map([...observations, ...direct].map(r => [r.t, r])).values()].sort((a, b) => a.t - b.t);
     const fc = D.forecast(rawForecast, issue, now);
     const rains = [2, 3].map(i => { const r = parse(coreFeeds[i], d => D.rain(d, now)); return r ? { ...r, ...D.rainWindow(r, now, 24), bins: D.rainBins(r, now, 36, 6), fresh: now - r.updated <= 24 * H } : null; });
+    const basin = parse(basinFeed, D.basinGeometry);
+    if (basinFeed.error) basinPromise = null;
     const gridPoints = [2, 3].map(i => coreFeeds[i].error ? null : D.gridPoint(coreFeeds[i].data));
     gridPoints.forEach((point, index) => {
-      if (!point && !coreFeeds[index + 2].error) {
-        coreFeeds[index + 2].error = 'Forecast grid geometry unavailable; precipitation values withheld';
+      if (!coreFeeds[index + 2].error && (!point || !basin || !D.gridCellWithinBasin(point, basin))) {
+        coreFeeds[index + 2].error = !point ? 'Forecast grid geometry unavailable; precipitation values withheld' : !basin ? 'Gauge-upstream drainage geometry unavailable; precipitation values withheld' : 'Forecast grid is not fully inside the displayed gauge-upstream drainage reference; precipitation values withheld';
         rains[index] = null;
+        gridPoints[index] = null;
       }
     });
     const observedRain = parse(rrmFeed, d => D.rrmRain(d, now, rrmFeed.selectedIssue));
-    const basin = parse(basinFeed, D.basinGeometry);
-    if (basinFeed.error) basinPromise = null;
     const allTides = (parse(coreFeeds[4], D.tides) || []).filter(r => r.t >= now);
     if (!coreFeeds[4].error && !allTides.length) coreFeeds[4].error = 'No upcoming high or low tides';
     const latest = merged.at(-1), change3 = D.recentChange(merged, latest, 3, now);
@@ -297,7 +298,8 @@
     badge('rain-status', fullRain ? 'Full 24 h coverage' : 'Incomplete / unavailable', fullRain ? 'neutral' : 'caution');
     put('rain-total', fullRain ? inches(meanMm) : '—');
     put('ops-rain', fullRain ? inches(meanMm) + ' in.' : 'Unavailable');
-    put('rain-note', 'Two separate National Weather Service (NWS) point forecasts whose full grid-cell polygons lie inside the displayed gauge-upstream drainage reference. The headline is their mean for the 24 hours from ' + date(now) + '; it is not an observed or area-wide total.');
+    const verifiedGeometry = !!state?.basin && (state.gridPoints || []).length === 2 && state.gridPoints.every(Boolean);
+    put('rain-note', verifiedGeometry ? 'Two separate National Weather Service (NWS) point forecasts whose current full grid-cell polygons were verified inside the displayed gauge-upstream drainage reference. The headline is their mean for the 24 hours from ' + date(now) + '; it is not an observed or area-wide total.' : 'A National Weather Service (NWS) forecast point is shown only after its current full grid-cell polygon is verified inside the displayed gauge-upstream drainage reference. Any point that cannot be checked is withheld; no partial set becomes the headline mean.');
     const labels = ['Mid area · grid 136,114', 'Upper-east area · grid 139,116'];
     $('rain-points').innerHTML = rains.map((r, i) => '<div class="rain-point"><strong><span>' + labels[i] + '</span><span>' + (r?.fresh && r.complete ? esc(inches(r.mm)) + ' in.' : 'Unavailable') + '</span></strong><small>' + (r ? (r.fresh ? '' : 'Stale · ') + 'Forecast updated ' + esc(date(r.updated)) + ' · ' + num(r.coveredHours) + '/24 h covered' : 'Forecast feed unavailable') + '</small></div>').join('');
     const rows = Array.from({ length: 6 }, (_, index) => ({ index, a: rains[0]?.bins?.[index] || null, b: rains[1]?.bins?.[index] || null }));
@@ -353,10 +355,10 @@
     }
     const percent = Math.round(screen.percent), relation = D.lineRelation(screen.difference), exceeded = relation.code === 'above';
     badge('rise-status', 'Experimental', exceeded ? 'caution' : 'neutral'); put('rise-percent', percent.toLocaleString('en-US'));
-    put('rise-title', num(screen.projectedRise) + ' cfs largest rise versus the ' + screen.threshold.cfs + ' cfs ' + screen.threshold.label + ' number');
-    put('screen-rise', num(screen.projectedRise) + ' cfs'); put('season-threshold', screen.threshold.cfs + ' cfs');
+    put('rise-title', num(screen.riseAtHighestShare) + ' cfs rise at the highest seasonal share versus the ' + screen.threshold.cfs + ' cfs ' + screen.threshold.label + ' number');
+    put('screen-rise', num(screen.riseAtHighestShare) + ' cfs'); put('season-threshold', screen.threshold.cfs + ' cfs');
     const relationText = relation.code === 'at' ? 'At the numeric line' : num(relation.distance) + ' cfs ' + relation.code + ' the numeric line';
-    put('rise-detail', relationText + ' at the ' + screen.pointSource + ' point ' + date(screen.pointTime) + '. Rolling low ' + num(screen.baselineCfs) + ' cfs at ' + date(screen.baselineTime) + '. Gauge alignment ' + signed(screen.adjustment) + ' cfs. Not official status.');
+    put('rise-detail', relationText + ' at the ' + screen.pointSource + ' point ' + date(screen.pointTime) + '. This point has the highest rise divided by its applicable seasonal number; it may not be the largest raw rise when that number changes. Rolling low ' + num(screen.baselineCfs) + ' cfs at ' + date(screen.baselineTime) + '. Gauge alignment ' + signed(screen.adjustment) + ' cfs. Not official status.');
     $('rise-progress').style.width = Math.min(100, Math.max(0, screen.percent)) + '%';
     $('rise-progress').style.background = exceeded ? 'var(--coral)' : 'var(--teal)';
   }
