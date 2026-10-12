@@ -1,77 +1,85 @@
 # Samish River Outlook
 
-[Live field-planning page](https://jdinneen.github.io/samish-river-outlook/)
+[Published field-planning page](https://jdinneen.github.io/samish-river-outlook/)
 
-Buildless HTML, CSS and JavaScript. Each browser requests the public USGS Burlington
-gauge, NOAA SMRW1 forecast, two NWS precipitation grid points, and Bellingham tide
-predictions, and displays the official NOAA KATX radar image directly. No runtime
-dependencies, tracking, accounts, backend or automated alerts.
-GitHub Pages serves this repository's main branch at the existing address.
-The deployed release receipt is `version.json`; it records the public release label
-and SHA-256 content hashes for the four runtime assets.
+Buildless HTML, CSS and JavaScript. Each browser requests public river, forecast,
+rain, radar, gauge-upstream drainage-area and tide sources directly. There is no runtime package,
+tracking, account, backend, automated alert or background monitor.
 
-Version 4 keeps the version 3 evidence boundaries while putting the operating graphics
-first. It adds:
+The source currently contains the version 5 candidate. It is not public merely
+because it is committed: `version.json` remains the receipt for the published
+version 4 until a separate release is requested and verified.
 
-- a first-screen river graph beside the official KATX standard base-reflectivity loop,
-  with a still-image control for pausing animation and reduced-motion preferences;
-- a separately labeled earlier saved path on the river graph when the existing
-  saved-forecast comparison has a path captured 3–36 hours earlier;
+## Version 5 candidate
 
-- a browser-profile saved-forecast check that can show when the gauge is materially
-  above a National Oceanic and Atmospheric Administration (NOAA) path captured
-  3–36 hours earlier and is still rising;
-- a clearly labeled experimental comparison against the confirmed seasonal 24-hour rise
-  numbers, while leaving the agency's unconfirmed starting-value method explicit;
-- same-window forecast-revision context, forecast-high/tide pairing, and links to
-  separate rainfall observations plus the University of Washington and AccuWeather
-  forecast views Jason already uses;
-- a direct Washington State Department of Health commercial-closure link and an
-  explicit statement that the page does not ingest official open/closed status;
-- copyable and downloadable field snapshots, source clocks, missing/stale-feed
-  handling, accessible data tables, keyboard tabs, and mobile/dark layouts.
+Version 5 keeps the earlier evidence boundaries and makes the page more useful
+during a storm:
+
+- a first-screen operating strip for river flow, near-three-hour change, the
+  applicable seasonal rise number, the current National Oceanic and Atmospheric
+  Administration (NOAA) path high, and next-24-hour forecast rain;
+- the river graph and official National Weather Service KATX radar side by side,
+  followed immediately by a six-hour forecast-rain chart;
+- three source-timestamped radar views: base reflectivity, estimated previous-hour
+  accumulation, and estimated storm-total accumulation, with the official legend
+  when it loads and a simplified gauge-upstream drainage-area overlay;
+- provisional rolling rain totals from Padilla Bay Farm, Burlington and
+  Sedro-Woolley RAWS, displayed separately from forecast locations;
+- neutral saved-path comparison wording instead of alert-like wording; and
+- an explicit browser-local storm-check log with notes, source timestamps,
+  individual deletion, confirmed clear-all and spreadsheet-safe CSV export.
 
 ## Meaning and limits
 
-- USGS measurements are provisional. Direct USGS values take precedence at matching
-  timestamps; the NOAA gauge copy is a fallback. Older-than-two-hour readings are
-  labeled stale.
-- NOAA forecasts are shown without alignment to the latest gauge. More-than-48-hour
-  issue age, missing issue clocks, unsupported gaps and expired coverage withhold
-  the forecast. The chart never extrapolates beyond supplied support. An available
-  forecast high is not a confirmed crest or a validated sampling window.
-- The seasonal screen is a transparent planning calculation, not the Department of
-  Health formula. It uses one constant gauge alignment, a strictly earlier rolling
-  24-hour low, and the confirmed seasonal numbers: 400 cubic feet per second (cfs)
-  in November–February, 200 cfs in March–April, and 100 cfs in May–October. It
-  withholds a result when gauge or forecast coverage is incomplete.
-- The saved-forecast check stores the first capture of each NOAA issue in that
-  browser for up to 14 days. “Outpacing” requires the unrounded later gauge value
-  to be at least 10% of the seasonal rise number above the saved, gauge-aligned
-  path and a positive measured change over 2.5–3.5 hours. This unvalidated line is
-  a prompt to re-check conditions, not a closure, dispatch, or all-clear rule.
-  Clearing browser data clears the history. The page refreshes only while its tab
-  is visible, and history does not transfer between browser profiles.
-- Rain is a mean of two selected grid points, not a basin-wide measurement. Both
-  points must have full next-24-hour coverage and updates no older than 24 hours.
-  Partial native intervals use uniform apportionment; missing values are not zero.
-- The KATX radar image is direct weather context. It carries its radar time along
-  the bottom of each frame; the page separately reports when the browser requested
-  it. Reflectivity is not ground-level rainfall, basin runoff or a correction to
-  the river forecast. A failed radar image does not change or erase river values.
-- Tide extrema are NOAA predictions in feet MLLW at Bellingham, not local access
-  clearance. Times display in America/Los_Angeles, including PST/PDT.
-- Numbered research summaries are a fixed October 11, 2026 snapshot checked against
-  the C1/C2 analysis outputs. Unverified bacteria/reopening summaries from the prior
-  public version were removed. No raw/sample-level records, laboratory rows,
-  correspondence or private source files are included in this update. Publishing
-  these aggregate summaries does not assert provider endorsement or permission to
-  redistribute the underlying records.
-- Research has not established a dependable operational artificial-intelligence (AI)
-  warning. Established sampling procedures and DOH decisions remain authoritative.
+- U.S. Geological Survey (USGS) river measurements are provisional. Direct USGS
+  values take precedence at matching timestamps; NOAA’s gauge copy is a fallback.
+  A reading older than two hours is labeled stale.
+- NOAA forecasts are shown without alignment to the latest gauge. An issue older
+  than 48 hours, an unsupported gap or expired coverage withholds the forecast.
+  The chart never extrapolates. A forecast high is not a confirmed crest or a
+  validated sampling window.
+- The seasonal screen is a transparent planning calculation, not the Department
+  of Health formula. It uses one constant gauge alignment, a strictly earlier
+  rolling 24-hour low, and the confirmed seasonal numbers: 400 cubic feet per
+  second (cfs) in November–February, 200 cfs in March–April, and 100 cfs in
+  May–October. Incomplete gauge or forecast support withholds the result.
+- The saved-path comparison stores the first capture of each NOAA issue in that
+  browser profile for up to 14 days. Its unvalidated 10% comparison line is a
+  measuring rule—not a closure probability, alert, dispatch recommendation or
+  all-clear. Clearing browser data clears this history.
+- Forecast rain comes from two National Weather Service (NWS) grid points. The
+  headline is their mean only when both fully cover the next 24 hours. The chart
+  uses six-hour blocks. Amounts crossing a block boundary are apportioned
+  uniformly; actual timing inside the interval can differ. The complete polygons
+  for grids SEW 136,114 and SEW 139,116 were checked inside the displayed
+  gauge-upstream drainage reference. They are still point forecasts, not an area
+  average. Invalid or missing grid geometry withholds that point; missing is never zero.
+- The Seattle NWS rain report contains provisional automated-station rolling totals
+  for 1, 3, 6, 12, 24, 48 and 72 hours. It is not an hourly history, a basin average
+  or ground truth at either forecast point. The page never subtracts the unlike
+  locations.
+- Radar reflectivity shows echoes aloft. One-hour and storm-total accumulation are
+  radar estimates in inches; storm total begins at the radar algorithm’s event
+  start and can span more than one day. Radar does not correct NOAA’s river path.
+- The USGS Network Linked Data Index supplies a simplified drainage area upstream
+  of gauge 12201500, based on whole NHDPlusV2 catchments. It is not the full Samish
+  watershed. The outline is a display reference, not a property, harvest-area or
+  regulatory boundary, and drives no calculation.
+- Tide extrema are NOAA predictions in feet relative to mean lower low water at
+  Bellingham, not Samish Bay water levels or access clearance.
+- The page attempts automatic refresh only while it is open, visible and the device
+  is awake. It sends no notification and guarantees no background monitoring.
+- A failed source clears that source’s displayed values and cannot become a
+  reassuring zero or “low risk.” Failures remain isolated from independent feeds.
+- Local storm checks are created only when the user presses Save. They remain in
+  that browser profile, can be exported or deleted, and are not sent anywhere. On
+  the next save, records older than 90 days are removed and only the newest 500 are kept.
+- Historical research summaries are a fixed October 11, 2026 snapshot checked
+  against their C1/C2 result records. Public-feed refreshes do not update them.
+  No experimental model supplies current values on this page.
 
 `backtest.js` is an unchanged historical asset from the preceding public version.
-The current page neither loads it nor uses it to calculate any displayed value.
+The current page neither loads it nor uses it to calculate a displayed value.
 
 ## Browser checks
 
@@ -82,33 +90,31 @@ Chromium browser. The website itself requires no installation or build.
 python tests/check_site.py
 ```
 
-The test starts and stops its own loopback-only static server. It also accepts an
-explicit local URL as the first argument. For the required release accessibility
-pass, set `AXE_PATH` to an axe-core 4.10.3 browser bundle and `REQUIRE_AXE=1` before
-running it. The ordinary local smoke test can omit both variables.
+The test starts and stops its own loopback-only server and intercepts external
+requests with deterministic fixtures. An explicit local URL is also accepted.
+For the required accessibility pass, set `AXE_PATH` to an axe-core 4.13.0 browser
+bundle and `REQUIRE_AXE=1`.
 
-Tests intercept external feeds with synthetic fixtures. They cover 95 numerical
-contracts, including Pacific-time seasonal boundaries, strict earlier baselines,
-gauge and forecast coverage, first-capture immutability, exact saved-path age and
-nearest-reading change windows, corrupt interior path points, malformed storage,
-unrounded warning decisions, forecast revisions,
-rainfall coverage, and tide times. Browser checks cover the learning, tracking,
-above-saved-path, outpacing, stale, partial-feed and all-feed-failure states; field
-snapshot download; loop/still radar controls, radar failure independent of river
-feeds, reduced-motion behavior, saved-path chart visibility; keyboard navigation;
-clipboard fallback; and panel overflow at
-320/390/768/1440 pixels in light and dark modes. Screenshots go to a temporary
-directory outside the repository. Tests never run scientific models.
+The suite covers 128 numerical contracts, including Pacific-time seasonal
+boundaries; strict river-history and forecast support; first-capture immutability;
+six-hour rain mass and missing coverage; Seattle rain-report zero, missing,
+monotonic-window, age, index/payload-clock and exact-row identity handling; radar
+capability clocks; closed, nondegenerate, non-self-intersecting basin and grid geometry;
+stale river-change rejection; storm-record validation; and CSV formula neutralization.
 
-The release also receives independent claim and user-experience reviews, live
-provider checks, and axe-core 4.10.3 Web Content Accessibility Guidelines (WCAG)
-2.0 A/AA, 2.1 AA and 2.2 AA checks across the learning, tracking,
-above-saved-path, outpacing and all-feeds-unavailable states in light/dark mode.
-The three panels are all checked in the outpacing state. Automated
-checks supplement browser inspection; they do not establish universal accessibility
-or scientific fitness.
+Browser checks cover all radar products, exact product time, official-legend failure,
+gauge-upstream overlay and retry, rain-grid geometry failure, rain chart and table,
+event-log save/reload/export/delete/clear,
+storage denial and corruption, reduced motion, source-specific failures, total-feed
+failure, keyboard tabs, clipboard fallback, and horizontal overflow at 320, 390,
+768, 1024 and 1440 pixels in light and dark modes. The required pass also runs
+Web Content Accessibility Guidelines (WCAG) 2.0 A/AA, 2.1 AA and 2.2 AA axe-core
+checks across operational and failure states. Automated checks supplement—not
+replace—browser inspection and source/claim review.
 
-Provider contracts: [USGS API migration](https://api.waterdata.usgs.gov/docs/ogcapi/migration/),
-[NWS grid points](https://weather-gov.github.io/api/gridpoints),
-[NWS radar](https://radar.weather.gov/station/KATX/standard),
-[NOAA tide API](https://api.tidesandcurrents.noaa.gov/api/prod/).
+Provider references: [USGS water API](https://api.waterdata.usgs.gov/),
+[USGS Network Linked Data Index](https://labs.waterdata.usgs.gov/docs/nldi/),
+[NWS grid data](https://weather-gov.github.io/api/gridpoints),
+[NWS Seattle text products](https://api.weather.gov/products/types/RRM/locations/SEW),
+[NWS KATX Web Map Service](https://opengeo.ncep.noaa.gov/geoserver/katx/ows?service=WMS&request=GetCapabilities),
+and [NOAA tide API](https://api.tidesandcurrents.noaa.gov/api/prod/).
