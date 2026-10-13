@@ -34,6 +34,64 @@ RADAR_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="900" height="600" 
 <rect width="900" height="600" fill="#11191b"/><g fill="none" stroke-linecap="round"><path d="M180 80 C360 110 560 220 780 270" stroke="#70c46e" stroke-width="72"/><path d="M280 120 C420 165 570 215 700 250" stroke="#f4d44d" stroke-width="45"/><path d="M390 165 C500 190 570 215 640 235" stroke="#dc6b3d" stroke-width="24"/></g><text x="20" y="35" font-family="sans-serif" font-size="22" fill="white">Synthetic KATX WMS fixture</text></svg>"""
 LEGEND_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="500" height="30" viewBox="0 0 500 30"><rect width="500" height="30" fill="white"/><text x="5" y="20" font-family="sans-serif" font-size="12">low</text><rect x="35" y="7" width="130" height="15" fill="#70c46e"/><rect x="165" y="7" width="130" height="15" fill="#f4d44d"/><rect x="295" y="7" width="130" height="15" fill="#dc6b3d"/><text x="435" y="20" font-family="sans-serif" font-size="12">high</text></svg>"""
 
+# ---- Version 7 fixture: the Samish rise of 29 September 2026, 15-minute readings ----
+# REAL (U.S. Geological Survey gauge 12201500, provisional, cubic feet per second):
+#   SEPT29_CFS            every quarter-hour from 8:00 AM Pacific on 29 September to 2:00 AM on 30 September
+#   SEPT29_BEFORE_0800    7:00 to 7:45 AM, worked back from the one-hour changes of the 8:00 to 8:45 AM readings
+#   SEPT30_HOURLY         the hourly readings from 3:00 to 8:00 AM on 30 September
+# INVENTED (shape only, so the 24-hour low and the 48-hour memory can be computed): everything before
+#   7:00 AM on 29 September. It is a slow recession to a single low of 15.9 cfs at 1:00 AM, the value of
+#   the real 24-hour low, followed by a smooth climb to the 7:00 AM reading. Its timing is not real.
+# Nothing here is fetched; every time is before 6 October 2026.
+PACIFIC_DAYLIGHT = timezone(timedelta(hours=-7))
+SEPT29_0800 = datetime(2026, 9, 29, 8, 0, tzinfo=PACIFIC_DAYLIGHT)
+SEPT29_CFS = [
+    46.0, 49.6, 53.4, 57.4, 62.5, 66.8, 71.3, 74.8, 78.3, 83.2, 88.3, 92.2,            # 8:00 to 10:45 AM
+    97.5, 103.0, 107.0, 113.0, 119.0, 124.0, 128.0, 133.0, 137.0, 142.0, 147.0, 152.0,  # 11:00 AM to 1:45 PM
+    157.0, 159.0, 161.0, 163.0, 163.0, 164.0, 164.0, 164.0, 164.0, 164.0, 166.0, 166.0,  # 2:00 to 4:45 PM
+    168.0, 170.0, 170.0, 172.0, 174.0, 176.0, 177.0, 179.0, 181.0, 183.0, 183.0, 185.0,  # 5:00 to 7:45 PM
+    187.0, 187.0, 189.0, 189.0, 191.0, 191.0, 191.0, 191.0, 191.0, 191.0, 191.0, 191.0,  # 8:00 to 10:45 PM
+    189.0, 189.0, 187.0, 185.0, 185.0, 183.0, 181.0, 179.0, 177.0, 176.0, 174.0, 172.0,  # 11:00 PM to 1:45 AM
+    170.0]                                                                               # 2:00 AM
+SEPT29_BEFORE_0800 = [36.0, 38.4, 40.0, 43.4]
+SEPT30_HOURLY = [163.0, 154.0, 147.0, 138.0, 132.0, 125.0]
+# NOAA tide predictions for Bellingham (station 9449211), times in GMT, feet above mean lower low water.
+# These are astronomical predictions, not observations. 2026-09-30 01:46 GMT is 6:46 PM Pacific on 29 September.
+SEPT29_TIDES = {'predictions': [
+    {'t': '2026-09-28 00:58', 'v': '8.176', 'type': 'H'}, {'t': '2026-09-28 07:33', 'v': '0.291', 'type': 'L'},
+    {'t': '2026-09-28 14:09', 'v': '7.668', 'type': 'H'}, {'t': '2026-09-28 19:39', 'v': '3.674', 'type': 'L'},
+    {'t': '2026-09-29 01:21', 'v': '8.2', 'type': 'H'}, {'t': '2026-09-29 08:12', 'v': '-0.603', 'type': 'L'},
+    {'t': '2026-09-29 15:08', 'v': '7.802', 'type': 'H'}, {'t': '2026-09-29 20:21', 'v': '4.593', 'type': 'L'},
+    {'t': '2026-09-30 01:46', 'v': '8.168', 'type': 'H'}, {'t': '2026-09-30 08:56', 'v': '-1.224', 'type': 'L'},
+    {'t': '2026-09-30 16:13', 'v': '7.846', 'type': 'H'}, {'t': '2026-09-30 21:07', 'v': '5.443', 'type': 'L'},
+    {'t': '2026-10-01 02:13', 'v': '8.071', 'type': 'H'}, {'t': '2026-10-01 09:44', 'v': '-1.507', 'type': 'L'},
+    {'t': '2026-10-01 17:29', 'v': '7.84', 'type': 'H'}, {'t': '2026-10-01 22:02', 'v': '6.135', 'type': 'L'}]}
+
+def sept29_readings():
+    """Gauge readings as the page holds them: [{'t': epoch milliseconds, 'q': cfs}], oldest first."""
+    ms = lambda moment: int(moment.timestamp() * 1000)
+    quarter = timedelta(minutes=15)
+    rows = []
+    lead_start = SEPT29_0800 - timedelta(hours=56)   # midnight Pacific at the start of 27 September
+    low_time = SEPT29_0800 - timedelta(hours=7)      # 1:00 AM Pacific on 29 September
+    moment = lead_start
+    while moment < low_time:                         # invented recession, 17.6 down to 16.0 cfs
+        share = (moment - lead_start) / (low_time - quarter - lead_start)
+        rows.append({'t': ms(moment), 'q': round(17.6 - 1.6 * share, 1)})
+        moment += quarter
+    rows.append({'t': ms(low_time), 'q': 15.9})      # the real 24-hour low, at an invented time
+    for step in range(1, 24):                        # invented climb, 1:15 to 6:45 AM
+        rows.append({'t': ms(low_time + step * quarter), 'q': round(16 + 20 * (step / 24) ** 2, 1)})
+    for step, flow in enumerate(SEPT29_BEFORE_0800):
+        rows.append({'t': ms(SEPT29_0800 - (4 - step) * quarter), 'q': flow})
+    for step, flow in enumerate(SEPT29_CFS):
+        rows.append({'t': ms(SEPT29_0800 + step * quarter), 'q': flow})
+    for step, flow in enumerate(SEPT30_HOURLY):
+        rows.append({'t': ms(SEPT29_0800 + timedelta(hours=19 + step)), 'q': flow})
+    assert all(later['t'] > earlier['t'] for earlier, later in zip(rows, rows[1:]))
+    assert max(row['t'] for row in rows) < ms(datetime(2026, 10, 6, tzinfo=timezone.utc))
+    return rows
+
 def fixtures():
     def series(rows):
         return {'primaryName': 'River Discharge', 'primaryUnits': 'kcfs',
@@ -107,7 +165,9 @@ with sync_playwright() as p:
             if request == 'getlegendgraphic' and mode['radar_legend_fail']:
                 return req.fulfill(status=503, body='Legend unavailable')
             body = LEGEND_SVG if request == 'getlegendgraphic' else RADAR_SVG
-            return req.fulfill(status=200, content_type='image/svg+xml', body=body, headers={'Access-Control-Allow-Origin': '*'})
+            # no-store: without it the browser may reuse a synthetic image it already holds for the
+            # same address and send no request, so an injected legend or layer failure never arrives.
+            return req.fulfill(status=200, content_type='image/svg+xml', body=body, headers={'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store'})
         if 'api.water.usgs.gov/nldi/' in u:
             if mode['fail'] or mode['basin_fail']:
                 return req.fulfill(status=503, body='Basin unavailable')
@@ -371,6 +431,274 @@ with sync_playwright() as p:
       check(D.makeSnapshot({usable:false,issued:now-H,rows:future},screen,obs.at(-1),now)===null,'unusable forecast not saved');
       return count;
     }""")
+    # Version 7 contracts: measured river state, NOAA's current issue against the gauge, tide, rain flags and
+    # the look-back counts. Every time here is fixed, so nothing depends on the day the suite runs.
+    v7_result = page.evaluate("""(fx) => {
+      const D=SamishData, H=D.H, M=60000, R=D.RIVER_RULES, at=text=>Date.parse(text), iso=t=>new Date(t).toISOString(); let count=0;
+      const check=(v,name)=>{if(!v)throw Error(name);count++};
+      const near=(a,b)=>Math.abs(a-b)<1e-6;
+      // Synthetic gauges. scene: a quiet `base` every 15 minutes for 80 hours, then `tail` as [minutes before the
+      // newest reading, cfs]. grid: one reading every 15 minutes for `hoursBack`, flow given by minutes back.
+      const scene=(end,tail,base=50)=>{const first=Math.max(...tail.map(p=>p[0])),rows=[];for(let m=first+80*60;m>first;m-=15)rows.push({t:end-m*M,q:base});for(const [m,q] of tail)rows.push({t:end-m*M,q});return rows.sort((a,b)=>a.t-b.t)};
+      const grid=(end,hoursBack,flow)=>{const rows=[];for(let m=hoursBack*60;m>=0;m-=15)rows.push({t:end-m*M,q:flow(m)});return rows};
+      const upTo=(rows,t)=>rows.filter(r=>r.t<=t);
+      const T=at('2026-07-15T19:00:00Z');   // noon Pacific in July: the May-October number, 100 cfs
+      // A rise from a quiet 50 cfs: 90, then 150 (exactly 100 above the low), 180, and a 200 cfs high `x`
+      // minutes before the newest reading; `after` follows the high. hold: one reading each quarter-hour after it.
+      const climb=(x,after=[])=>scene(T,[[x+45,90],[x+30,150],[x+15,180],[x,200],...after]);
+      const hold=(x,q=199)=>{const out=[];for(let m=Math.ceil(x/15)*15-15;m>=0;m-=15)out.push([m,q]);return out};
+
+      // Rule constants.
+      check(R.freshMinutes===90&&R.pauseMinutes===60&&R.peakMinutes===120&&R.fallingFraction===0.05&&R.risingCfs===2&&R.risingFraction===0.02&&R.riseMemoryHours===48&&R.lastHourToleranceMinutes===20&&R.maxGapMinutes===60,'river rule constants');
+      check(Object.isFrozen(R)&&Object.keys(R).length===9,'river rule constants are one frozen object');
+      check(Object.isFrozen(D.RAIN_RULES)&&D.RAIN_RULES.suspectZeroOtherGaugesIn===0.25&&D.RAIN_RULES.dryMonths.join()==='5,6,7,8,9,10','rain rule constants');
+
+      // River state. Freshness: exactly 90 and 91 minutes; a feed 110 minutes behind; holes.
+      const quiet=scene(T,[[0,50]]);
+      let s=D.riverState(quiet,T+90*M);
+      check(s.available&&s.fresh&&s.ageMinutes===90&&s.staleCode===null&&s.reason===null&&s.checkTime===T+90*M,'reading exactly 90 minutes old is fresh');
+      s=D.riverState(quiet,T+90*M+59000);check(s.fresh&&s.ageMinutes===90,'age is counted in whole minutes');
+      s=D.riverState(quiet,T+91*M);
+      check(s.available&&!s.fresh&&s.ageMinutes===91&&s.staleCode==='old-reading'&&s.reading.t===T&&s.reading.q===50&&typeof s.reason==='string','reading 91 minutes old is not fresh but is still returned with its age');
+      check(s.lastHour===null&&s.threeHour===null&&s.threshold===null&&s.low24===null&&s.rise===null&&s.riseStatus==='unknown'&&s.riseStart===null&&s.high===null&&s.minutesSinceHigh===null&&s.belowHigh===null&&s.state===null,'stale reading carries no change figure and no state');
+      s=D.riverState(climb(0),T+20*M);check(s.fresh&&s.state==='new-high'&&s.riseStatus==='in-progress','rising river with a recent reading has a state');
+      s=D.riverState(climb(0),T+110*M);
+      check(!s.fresh&&s.ageMinutes===110&&s.staleCode==='old-reading'&&s.state===null&&s.lastHour===null&&s.rise===null&&s.riseStart===null&&s.high===null&&s.riseStatus==='unknown','a feed 110 minutes behind is not a plateau: no state and no change figures');
+      s=D.riverState(quiet.filter(r=>r.t<=T-90*M||r.t===T),T+5*M);
+      check(s.available&&!s.fresh&&s.staleCode==='gap-in-last-hour'&&s.gapMinutes===90&&s.ageMinutes===5&&s.state===null&&s.lastHour===null&&s.rise===null,'a 90-minute hole before the newest reading: cannot tell');
+      s=D.riverState(quiet.filter(r=>(T-r.t)%(60*M)===0),T);check(s.fresh&&s.lastHour&&s.lastHour.change===0&&s.lastHour.spanMinutes===60,'readings exactly 60 minutes apart are not a hole');
+      s=D.riverState([...quiet.filter(r=>r.t<=T-75*M),{t:T-61*M,q:50},{t:T,q:50}],T);check(!s.fresh&&s.staleCode==='gap-in-last-hour'&&s.gapMinutes===61,'a 61-minute hole is a hole');
+      s=D.riverState(quiet.filter(r=>r.t<=T-135*M||r.t>=T-45*M),T);check(!s.fresh&&s.staleCode==='gap-in-last-hour'&&s.gapMinutes===90,'a hole that reaches into the last hour: cannot tell');
+      s=D.riverState(quiet.filter(r=>r.t<=T-180*M||r.t>=T-75*M),T);
+      check(s.fresh&&s.lastHour.label==='about level'&&s.low24===null&&s.rise===null&&s.riseStatus==='unknown'&&s.riseStart===null&&s.state===null,'an older hole leaves the last hour readable but the 24-hour low unknown, not zero');
+      s=D.riverState(quiet.filter(r=>r.t>=T-45*M),T);check(!s.fresh&&s.staleCode==='gap-in-last-hour'&&s.gapMinutes===null,'readings that do not reach back one hour: cannot tell');
+      s=D.riverState([],T);check(!s.available&&s.reading===null&&s.ageMinutes===null&&s.staleCode==='no-reading'&&!s.fresh&&s.state===null,'no reading at all');
+      check(!D.riverState(null,T).available&&!D.riverState(quiet,NaN).available&&!D.riverState([{t:T,q:1},{t:T,q:2}],T).available,'unreadable gauge input fails closed');
+      s=D.riverState([...quiet,{t:T+30*M,q:999},{t:T-7*M,q:'oops'},{t:'x',q:5}],T);check(s.reading.t===T&&s.reading.q===50,'future-dated and malformed rows are ignored');
+
+      // River state. Change over the last hour: nearest reading within 60 +/- 20 minutes; both +2 cfs and +2% for "rising".
+      const hourTail=(before,latest)=>scene(T,[[60,before],[45,before],[30,before],[15,before],[0,latest]]);
+      s=D.riverState(hourTail(100,102),T);check(s.lastHour.change===2&&near(s.lastHour.percent,2)&&s.lastHour.label==='rising'&&s.lastHour.before.q===100&&s.lastHour.before.t===T-60*M,'+2 cfs and +2% is rising');
+      s=D.riverState(hourTail(105,107),T);check(s.lastHour.change===2&&s.lastHour.percent<2&&s.lastHour.percent>1.9&&s.lastHour.label==='about level','+2 cfs with +1.9% is about level');
+      s=D.riverState(hourTail(50,51.5),T);check(s.lastHour.label==='about level','+3% with only +1.5 cfs is about level');
+      s=D.riverState(hourTail(100,98),T);check(s.lastHour.change===-2&&s.lastHour.label==='falling','-2 cfs and -2% is falling');
+      s=D.riverState(hourTail(105,103),T);check(s.lastHour.label==='about level','-2 cfs with -1.9% is about level');
+      check(65.1-63.1!==2,'fixture relies on binary rounding of a published 2.0 cfs step');
+      s=D.riverState(hourTail(63.1,65.1),T);check(s.lastHour.label==='rising','a published +2.0 cfs step is rising despite binary rounding');
+      check(D.lastHourLabel(2,100)==='rising'&&D.lastHourLabel(1.99,50)==='about level'&&D.lastHourLabel(-2,100)==='falling'&&D.lastHourLabel(0,100)==='about level'&&D.lastHourLabel(NaN,100)===null&&D.lastHourLabel(2,null)===null,'last-hour label function');
+      s=D.riverState(scene(T,[[85,60],[35,64],[0,66]]),T);check(s.fresh&&s.lastHour===null,'no reading within 60 +/- 20 minutes: last-hour change absent, not zero');
+      s=D.riverState(scene(T,[[80,60],[40,64],[0,66]]),T);check(s.lastHour.before.t===T-40*M&&s.lastHour.change===2&&s.lastHour.spanMinutes===40,'last-hour tie uses the more recent reading');
+      s=D.riverState(scene(T,[[80,60],[45,61],[0,66]]),T);check(s.lastHour.before.t===T-45*M&&s.lastHour.change===5,'last-hour change uses the nearest reading inside the tolerance');
+      s=D.riverState(grid(T,30,m=>m===0?66:m===180?60:50),T);check(s.threeHour.change===6&&s.threeHour.spanMinutes===180&&s.threeHour.before.t===T-180*M,'about-three-hour change');
+
+      // River state. The 24-hour low, the measured rise and its share of the seasonal number.
+      s=D.riverState(grid(T,30,m=>m===0?60:(m===600||m===300)?40:50),T);
+      check(s.low24.q===40&&s.low24.t===T-600*M&&s.rise.cfs===20&&near(s.rise.share,0.2)&&s.threshold.cfs===100&&s.riseStatus==='none','24-hour low takes the earliest reading on a tie');
+      s=D.riverState(grid(T,24,m=>m===1440?30:m===0?60:50),T);check(s.low24&&s.low24.q===30&&s.rise.cfs===30,'24-hour low includes the reading exactly 24 hours back');
+      s=D.riverState(grid(T,23.75,m=>50),T);check(s.fresh&&s.low24===null&&s.rise===null&&s.riseStatus==='unknown','readings that stop short of 24 hours give no 24-hour low');
+      s=D.riverState(grid(T,30,m=>50).filter(r=>r.t<=T-600*M||r.t>=T-525*M),T);check(s.fresh&&s.low24===null&&s.rise===null,'a 75-minute hole inside the 24 hours gives no 24-hour low');
+      s=D.riverState(grid(T,30,m=>m===0?50.1:50),T);
+      check(s.fresh&&s.riseStatus==='none'&&s.riseStart===null&&s.high===null&&s.minutesSinceHigh===null&&s.state===null&&s.lastHour.label==='about level'&&near(s.rise.cfs,0.1),'a one-step wobble on a quiet day is not a rise and has no high');
+
+      // River state. "This rise": start, 48-hour memory, and the high since the start.
+      s=D.riverState(climb(0),T);
+      check(s.riseStart.t===T-30*M&&s.riseStart.q===150&&s.riseStart.riseCfs===100&&s.riseStart.low.q===50&&s.riseStart.threshold.cfs===100&&s.riseStart.atOrBefore===false,'rise starts at the first reading exactly at the seasonal number');
+      check(s.high.q===200&&s.high.t===T&&s.minutesSinceHigh===0&&s.belowHigh.cfs===0&&s.belowHigh.fraction===0&&s.rise.cfs===150&&near(s.rise.share,1.5),'new high: the newest reading is the high');
+      s=D.riverState(scene(T,[[45,90],[30,149.9],[15,180],[0,200]]),T);check(s.riseStart.t===T-15*M&&s.riseStart.riseCfs===130,'0.1 cfs short of the number is not the start');
+      const blip=start=>grid(T,100,m=>({0:160,15:150,30:140,45:120,60:100,75:80,90:60})[start-m]??50);
+      s=D.riverState(blip(47*60),T);
+      check(s.riseStatus==='in-progress'&&s.riseStart.t===T-47*H&&s.riseStart.atOrBefore===false&&s.high.q===160&&s.high.t===T-47*H&&s.minutesSinceHigh===47*60&&s.state==='falling'&&s.rise.cfs===0,'a number passed 47 hours ago is still remembered');
+      s=D.riverState(blip(49*60),T);check(s.fresh&&s.riseStatus==='none'&&s.riseStart===null&&s.high===null&&s.state===null,'a number passed 49 hours ago is no longer remembered');
+      s=D.riverState(blip(48*60),T);check(s.riseStatus==='in-progress'&&s.riseStart.t===T-48*H&&s.riseStart.atOrBefore===true,'the earliest reading of the 48 hours already at the number is flagged at-or-before');
+      s=D.riverState(grid(T,30,m=>m>=27*60?50:200),T);
+      check(s.riseStatus==='in-progress'&&s.riseStart.atOrBefore===true&&s.riseStart.t===T-6*H&&s.high.t===T-6*H&&s.state==='may-have-peaked','a rise older than the readable history is flagged at-or-before');
+
+      // River state. States and their boundaries (reading time): 59, 60, 119 and 120 minutes; exactly 5% below.
+      s=D.riverState(climb(59,hold(59)),T);check(s.state==='just-off-high'&&s.minutesSinceHigh===59&&s.high.q===200&&s.belowHigh.cfs===1,'59 minutes since the high: just off the high');
+      s=D.riverState(climb(60,hold(60)),T);check(s.state==='paused'&&s.minutesSinceHigh===60,'60 minutes since the high: paused');
+      s=D.riverState(climb(119,hold(119)),T);check(s.state==='paused'&&s.minutesSinceHigh===119,'119 minutes since the high: still paused');
+      s=D.riverState(climb(120,hold(120)),T);check(s.state==='may-have-peaked'&&s.minutesSinceHigh===120,'120 minutes since the high: may have peaked');
+      for(const late of [0,30,90]){s=D.riverState(climb(105,hold(105)),T+late*M);check(s.state==='paused'&&s.minutesSinceHigh===105&&s.ageMinutes===late,'durations count reading time, not the device clock (reading '+late+' minutes old)');}
+      s=D.riverState(climb(90,[...hold(90).slice(0,-1),[0,190]]),T);check(s.state==='falling'&&near(s.belowHigh.fraction,0.05)&&s.belowHigh.cfs===10,'exactly 5% below the high: falling');
+      s=D.riverState(climb(90,[...hold(90).slice(0,-1),[0,190.5]]),T);check(s.state==='paused'&&s.belowHigh.fraction<0.05,'just under 5% below the high is not falling');
+      s=D.riverState(climb(180,[...hold(180).slice(0,-1),[0,150]]),T);check(s.state==='falling'&&s.minutesSinceHigh===180,'falling is named before may-have-peaked');
+      const surge=[];for(let m=285;m>=0;m-=15)surge.push([m,m>=240?200-(300-m)/15*10:m>60?150:150+(60-m)/15*5]);
+      s=D.riverState(climb(300,surge),T);
+      check(s.state==='rising-again'&&s.lastHour.label==='rising'&&s.lastHour.change===20&&s.high.q===200&&s.high.t===T-300*M&&s.belowHigh.cfs===30&&s.minutesSinceHigh===300,'a second, lower surge is rising again, not may-have-peaked and not falling');
+      s=D.riverState(climb(300,surge.map(p=>[p[0],Math.min(p[1],150)])),T);check(s.state==='falling','without the second surge the same river is falling');
+      const tie=scene(T,[[60,100],[45,150],[30,180],[15,191],[0,191]]);
+      s=D.riverState(tie,T);check(s.state==='just-off-high'&&s.high.q===191&&s.high.t===T-15*M&&s.minutesSinceHigh===15&&s.belowHigh.cfs===0,'191 then 191: a tie is not a new high');
+      s=D.riverState(upTo(tie,T-15*M),T-15*M);check(s.state==='new-high'&&s.high.t===T-15*M,'the first 191 was the new high');
+      const wobble=before=>scene(T,[[105,100],[90,150],[75,157],[60,before],[45,163],[30,163],[15,164],[0,163]]);
+      const states=rows=>[45,30,15,0].map(m=>D.riverState(upTo(rows,T-m*M),T-m*M));
+      let run=states(wobble(160));
+      check(run.map(r=>r.state).join()==='new-high,just-off-high,new-high,just-off-high'&&run[3].high.q===164&&run[3].high.t===T-15*M&&run[3].lastHour.label==='about level','163, 163, 164, 163: no peak, pause or falling state, and the high stays 164');
+      run=states(wobble(157));
+      check(run.map(r=>r.state).join()==='new-high,just-off-high,new-high,rising-again'&&run[3].belowHigh.cfs===1&&run[3].lastHour.change===6,'163, 163, 164, 163 while the last hour is still up 6 cfs: rising again, 1 cfs below the high');
+      check(run.every(r=>!['falling','paused','may-have-peaked','cannot-tell'].includes(r.state)),'a one-step dip never reads as a peak');
+      const holed=scene(T,[[285,90],[270,150],[255,180],[240,200],[225,199],[210,199],[195,199],...[105,90,75,60,45,30,15,0].map(m=>[m,199])]);
+      s=D.riverState(holed,T);
+      check(s.fresh&&s.state==='cannot-tell'&&s.gapMinutes===90&&typeof s.reason==='string'&&s.riseStatus==='in-progress'&&s.high.q===200&&s.lastHour.label==='about level'&&s.low24===null&&s.rise===null,'a 90-minute hole between the high and the newest reading: cannot tell');
+
+      // River state. Yesterday's higher peak belongs to no rise (it never passed the winter number), so it is not this rise's high.
+      const TW=at('2026-01-16T20:00:00Z');   // noon Pacific in January: the November-February number, 400 cfs
+      const winter=grid(TW,90,m=>m>=1560?600:m>=1200?600+(1560-m)/360*300:m>=480?900-(1200-m)/720*450:m>=300?450:450+(300-m)/300*410);
+      s=D.riverState(winter,TW);
+      check(s.threshold.cfs===400&&s.state==='new-high'&&s.high.q===860&&s.high.t===TW&&s.riseStart.t===TW&&near(s.rise.cfs,410)&&Math.max(...winter.map(r=>r.q))===900,'yesterday’s higher peak is not the high of a new rise');
+      const winterHeld=[...winter,...[15,30,45,60,75].map(m=>({t:TW+m*M,q:860}))];
+      s=D.riverState(winterHeld,TW+75*M);
+      check(s.state==='paused'&&s.minutesSinceHigh===75&&s.high.q===860&&s.high.t===TW,'a new rise that pauses reads 75 minutes since its own high, not 20 hours since yesterday’s');
+
+      // River state. Seasonal boundary: the number in force at each reading (31 October to 1 November, Pacific).
+      const TB=at('2026-11-01T07:15:00Z');   // 12:15 AM Pacific on 1 November
+      s=D.riverState(scene(TB,[[60,120],[45,160],[30,190],[15,200],[0,210]]),TB);
+      check(s.riseStatus==='in-progress'&&s.riseStart.t===TB-45*M&&s.riseStart.threshold.cfs===100&&s.riseStart.threshold.label===D.thresholdAt(TB-45*M).label&&s.riseStart.riseCfs===110,'a rise that passed the October number before midnight keeps that number and start');
+      check(s.threshold.cfs===400&&near(s.rise.share,0.4)&&s.rise.cfs===160&&s.state==='new-high','after midnight the share is measured against the November number');
+      s=D.riverState(scene(TB,[[60,120],[45,140],[30,149],[15,200],[0,210]]),TB);
+      check(s.fresh&&s.riseStatus==='none'&&s.riseStart===null&&s.state===null&&s.rise.cfs===160,'150 cfs of rise first reached after midnight is below the November number');
+
+      // River state. The rise of 29 September 2026 (15-minute readings; times Pacific daylight, 7 hours behind GMT).
+      const sept=fx.readings, P=clock=>at((clock<'03:00'?'2026-09-30T':'2026-09-29T')+clock+':00-07:00');
+      const frame=(clock,delay=0)=>D.riverState(upTo(sept,P(clock)),P(clock)+delay*M);
+      check(sept.length===303&&sept.at(-1).q===125&&sept.at(-1).t===at('2026-09-30T08:00:00-07:00'),'29 September fixture shape');
+      s=frame('11:45');check(s.fresh&&s.riseStatus==='none'&&s.state===null&&near(s.rise.cfs,97.1)&&s.lastHour.label==='rising','11:45 AM: rising fast but the measured rise is still under 100 cfs');
+      s=frame('12:00',20);
+      check(s.riseStatus==='in-progress'&&s.riseStart.t===P('12:00')&&s.riseStart.q===119&&near(s.riseStart.riseCfs,103.1)&&s.riseStart.atOrBefore===false&&s.riseStart.threshold.cfs===100&&s.state==='new-high'&&s.ageMinutes===20,'12:00 PM: past the 100 cfs number at this reading');
+      // 3:00 PM is NOT a new high: 163 cfs was first read at 2:45 PM and the 3:00 PM reading only equals it
+      // (a tie is not a new high), so the state is just-off-high.
+      s=frame('15:00');check(s.state==='just-off-high'&&s.high.q===163&&s.high.t===P('14:45')&&s.minutesSinceHigh===15&&s.reading.q===163,'3:00 PM: 163 cfs ties the 2:45 PM high');
+      check(frame('14:45').state==='new-high'&&frame('15:15').state==='new-high'&&frame('15:15').high.q===164,'2:45 PM and 3:15 PM are the new highs either side');
+      s=frame('16:00');check(s.state==='just-off-high'&&s.minutesSinceHigh===45&&s.high.q===164&&s.high.t===P('15:15')&&s.lastHour.change===1&&s.lastHour.label==='about level','4:00 PM: 45 minutes since the 3:15 PM high, last hour +1');
+      // 4:15 PM is a pause, not just-off-high: 164 cfs was first read at 3:15 PM, exactly 60 minutes of readings
+      // earlier (pauseMinutes is 60). The river then went on from 164 to 191 cfs.
+      s=frame('16:15');check(s.state==='paused'&&s.minutesSinceHigh===60&&s.high.t===P('15:15')&&s.lastHour.change===0,'4:15 PM: 60 minutes since the 3:15 PM high is a pause');
+      for(const clock of ['17:00','19:00','21:00']){s=frame(clock);check(s.state==='new-high'&&s.high.t===P(clock)&&s.minutesSinceHigh===0,clock+': new high');}
+      s=frame('19:00',20);
+      check(s.reading.q===181&&s.ageMinutes===20&&s.lastHour.change===7&&s.lastHour.label==='rising'&&s.threeHour.change===17&&near(s.rise.cfs,165.1)&&near(s.rise.share,1.651)&&s.low24.q===15.9&&s.low24.t===P('01:00')-24*H&&s.riseStart.t===P('12:00'),'7:00 PM read at 7:20 PM: 181 cfs, +7 in the hour before, 165 cfs above the 24-hour low');
+      s=frame('22:00');check(s.state==='paused'&&s.minutesSinceHigh===60&&s.high.q===191&&s.high.t===P('21:00')&&s.lastHour.label==='about level'&&s.threeHour.change===10,'10:00 PM: paused, last hour level although the three-hour change is still +10');
+      s=frame('22:45');check(s.state==='paused'&&s.minutesSinceHigh===105,'10:45 PM: paused');
+      s=frame('22:45',20);check(s.state==='paused'&&s.minutesSinceHigh===105&&s.ageMinutes===20,'10:45 PM read at 11:05 PM: still 105 minutes of readings, still paused');
+      s=frame('22:00',60);check(s.state==='paused'&&s.minutesSinceHigh===60&&s.ageMinutes===60,'11:00 PM with the newest reading an hour old: a one-hour pause, not two hours');
+      s=frame('23:00');check(s.state==='may-have-peaked'&&s.minutesSinceHigh===120&&s.high.q===191&&s.high.t===P('21:00')&&s.lastHour.change===-2&&s.lastHour.label==='about level','11:00 PM: may have peaked');
+      for(let t=P('12:00');t<P('23:00');t+=15*M){s=D.riverState(upTo(sept,t),t);check(!['may-have-peaked','falling','cannot-tell','rising-again',null].includes(s.state)&&s.riseStart.t===P('12:00'),'no may-have-peaked or falling state before 11:00 PM ('+iso(t)+')');}
+      check(frame('16:15').state==='paused'&&frame('16:30').state==='new-high','the 4:15 PM pause was followed by a new high at 4:30 PM');
+      check(frame('22:15').lastHour.label!=='rising'&&frame('23:15').lastHour.label!=='rising','no rising word at 10:15 PM or 11:15 PM');
+      check(frame('00:15').state==='may-have-peaked'&&frame('00:30').state==='falling'&&near(frame('00:30').belowHigh.cfs,10),'falling first at 12:30 AM, 181 cfs against the 191 cfs high');
+      s=D.riverState(sept,at('2026-09-30T08:20:00-07:00'));
+      check(s.fresh&&s.riseStatus==='in-progress'&&s.riseStart.t===P('12:00')&&s.rise.cfs===79&&s.rise.share<1&&s.state==='falling'&&s.high.q===191&&s.high.t===P('21:00')&&s.minutesSinceHigh===660&&s.lastHour.change===-7,'next morning: the measured rise is back under 100 cfs but the number is still remembered since 12:00 PM');
+
+      // NOAA's current issue against the gauge. This NOAA path is INVENTED: six-hourly values that never show
+      // the rise (91 cfs at 11 AM Pacific, then falling), issued 8:14 AM Pacific. Only its arithmetic is tested.
+      const noaaPath=[['2026-09-29T06:00:00Z',17],['2026-09-29T12:00:00Z',26],['2026-09-29T18:00:00Z',91],['2026-09-30T00:00:00Z',78],['2026-09-30T06:00:00Z',61],['2026-09-30T12:00:00Z',49],['2026-09-30T18:00:00Z',42],['2026-10-01T00:00:00Z',37],['2026-10-01T06:00:00Z',33],['2026-10-01T12:00:00Z',30],['2026-10-01T18:00:00Z',28],['2026-10-02T00:00:00Z',26],['2026-10-02T06:00:00Z',25],['2026-10-02T12:00:00Z',24],['2026-10-02T18:00:00Z',23]].map(([t,q])=>({t:at(t),q}));
+      const noaaIssue='2026-09-29T15:14:00Z';
+      const against=(clock,delay=20)=>D.noaaAgainstGauge(frame(clock,delay),noaaPath,noaaIssue,P(clock)+delay*M);
+      let n=against('19:00');
+      check(n.code==='not-tracking'&&n.notTracking&&n.reason===null&&n.gaugeCfs===181&&n.readingTime===P('19:00')&&near(n.forecastCfs,78-17/3)&&near(n.difference,181-(78-17/3))&&n.line===10&&n.threshold.cfs===100&&n.aboveLine===true&&n.riseInProgress===true,'7:00 PM: gauge 181 against NOAA 72.3 for that time, not tracking');
+      check(n.issued===at(noaaIssue)&&n.issueAgeMinutes===666&&n.pathOnlyFalls===true,'NOAA issue age and a path that only falls from the check time');
+      check(D.noaaAgainstGauge(frame('19:00',20),noaaPath,at(noaaIssue),P('19:00')+20*M).code==='not-tracking','issue time accepted as epoch milliseconds');
+      n=against('12:00');check(n.code==='not-tracking'&&near(n.forecastCfs,91-13/6)&&n.pathOnlyFalls===true,'12:00 PM: not tracking from the reading that passed the number');
+      n=against('11:15');check(n.code==='above-line'&&!n.notTracking&&n.aboveLine===true&&n.riseInProgress===false&&n.difference>10,'11:15 AM: above NOAA by the line, but the measured rise has not passed the number');
+      n=against('11:00');check(n.code==='within-line'&&n.aboveLine===false&&near(n.difference,6.5)&&!n.notTracking,'11:00 AM: 6.5 cfs above NOAA is inside the 10 cfs line');
+      n=against('10:00');check(n.code==='within-line'&&n.difference<0&&n.pathOnlyFalls===false,'10:00 AM: gauge under NOAA, and the path still rises');
+      const flat=(value,from=-12)=>Array.from({length:16},(_,i)=>({t:T+(from+i*6)*H,q:value}));
+      n=D.noaaAgainstGauge(D.riverState(climb(0),T+20*M),flat(100),iso(T-7*H+20*M),T+20*M);
+      check(n.code==='not-tracking'&&n.issueAgeMinutes===420&&n.forecastCfs===100&&n.difference===100&&n.pathOnlyFalls===false,'first visit: a 7-hour-old issue and the gauge at twice its value');
+      check(D.noaaAgainstGauge(D.riverState(climb(0),T),flat(190),iso(T-H),T).code==='not-tracking','exactly at the 10% line counts as above it');
+      check(D.noaaAgainstGauge(D.riverState(climb(0),T),flat(190.5),iso(T-H),T).code==='within-line','just under the 10% line is within it');
+      n=D.noaaAgainstGauge(D.riverState(quiet,T),flat(30),iso(T-H),T);check(n.code==='above-line'&&!n.notTracking&&n.difference===20&&n.riseInProgress===false,'above NOAA with no rise in progress is not "not tracking"');
+      n=D.noaaAgainstGauge(D.riverState(climb(0),T+110*M),flat(100),iso(T-H),T+110*M);
+      check(n.code==='unknown'&&!n.notTracking&&n.aboveLine===true&&n.riseInProgress===null&&typeof n.reason==='string'&&n.difference===100,'gauge feed late: the comparison is stated but the code is unknown');
+      n=D.noaaAgainstGauge(D.riverState(climb(0),T),flat(100,1),iso(T-H),T);check(n.code==='unknown'&&n.forecastCfs===null&&n.difference===null&&n.aboveLine===null&&n.gaugeCfs===200&&n.pathOnlyFalls===false&&typeof n.reason==='string','no value is invented before the first point of the NOAA path');
+      n=D.noaaAgainstGauge(D.riverState(climb(0),T),[{t:T-8*H,q:100},...flat(100,1)],iso(T-H),T);check(n.forecastCfs===null&&n.code==='unknown','no value across forecast points more than 6 hours apart');
+      n=D.noaaAgainstGauge(D.riverState(climb(0),T),flat(100),iso(T-49*H),T);check(n.code==='unknown'&&n.pathOnlyFalls===null&&n.forecastCfs===null&&n.issued===T-49*H&&typeof n.reason==='string','an issue over 48 hours old is not compared');
+      n=D.noaaAgainstGauge(null,flat(100),iso(T-H),T);check(n.code==='unknown'&&n.gaugeCfs===null&&n.pathOnlyFalls===false,'no gauge reading: nothing to compare');
+      check(D.noaaAgainstGauge(D.riverState(climb(0),T),null,iso(T-H),T).code==='unknown'&&D.noaaAgainstGauge(D.riverState(climb(0),T),flat(100),undefined,T).code==='unknown','missing forecast path or issue time fails closed');
+      const window72=rows=>D.forecast(rows,iso(T-H),T);
+      check(D.forecastOnlyFalls(window72(flat(100).map((r,i)=>({...r,q:200-i}))))===true,'a path that only falls');
+      check(D.forecastOnlyFalls(window72(flat(100)))===false,'a flat path does not fall');
+      check(D.forecastOnlyFalls(window72(flat(100).map((r,i)=>({...r,q:i===5?150:200-i}))))===false,'a path that falls and then steps up does not only fall');
+      check(D.forecastOnlyFalls(window72(flat(100).map((r,i)=>({...r,q:100+i}))))===false,'a rising path does not fall');
+      check(D.forecastOnlyFalls({usable:false,rows:[]})===null&&D.forecastOnlyFalls(null)===null,'no usable forecast: no falls-only flag');
+
+      // The earlier-forecast comparison takes its "rising" word from the last-hour label.
+      const watch={code:'outpacing',expected:80,observed:101,difference:21,line:10,change3:4,span3:3,snapshot:{}};
+      let w=D.watchWithLastHour(watch,{fresh:true,lastHour:{label:'rising'}});check(w.code==='outpacing'&&w.lastHourLabel==='rising'&&w.expected===80&&w.difference===21,'above the earlier forecast and rising in the last hour');
+      w=D.watchWithLastHour(watch,{fresh:true,lastHour:{label:'about level'}});check(w.code==='above-prior'&&w.lastHourLabel==='about level','a positive three-hour change is not "rising" when the last hour is level');
+      check(D.watchWithLastHour(watch,{fresh:true,lastHour:{label:'falling'}}).code==='above-prior','falling in the last hour is not rising');
+      check(D.watchWithLastHour({...watch,code:'above-prior',change3:-1},{fresh:true,lastHour:{label:'rising'}}).code==='outpacing','rising in the last hour is rising even when the three-hour change is not');
+      w=D.watchWithLastHour(watch,{fresh:false,lastHour:null});check(w.code==='above-prior'&&w.lastHourLabel===null,'no last-hour label: never "rising"');
+      check(D.watchWithLastHour(watch,{fresh:true,lastHour:null}).lastHourLabel===null&&D.watchWithLastHour(watch,null).code==='above-prior','missing river state: never "rising"');
+      for(const code of ['tracking','learning','unknown'])check(D.watchWithLastHour({...watch,code},{fresh:true,lastHour:{label:'rising'}}).code===code,'other comparison codes are unchanged: '+code);
+      check(D.watchWithLastHour(null,{fresh:true,lastHour:{label:'rising'}}).code==='unknown','missing comparison stays unknown');
+      const tenPm=frame('22:00'),savedTimes=Array.from({length:14},(_,i)=>P('16:00')+i*6*H);
+      const saved={issueTime:iso(P('15:00')),capturedAt:iso(P('16:00')),gaugeTime:iso(P('16:00')),gaugeCfs:164,adjustment:80,alignedPath:savedTimes.map((t,i)=>({t,q:i?150:164})),rawPath:savedTimes.map((t,i)=>({t,q:i?70:84}))};
+      w=D.surpriseWatch({t:tenPm.reading.t,q:tenPm.reading.q,change3:tenPm.threeHour.change,span3:tenPm.threeHour.spanMinutes/60,fresh:true},[saved]);
+      check(w.code==='outpacing'&&w.change3===10,'10:00 PM on 29 September: the three-hour rule alone still says rising');
+      check(D.watchWithLastHour(w,tenPm).code==='above-prior'&&D.watchWithLastHour(w,tenPm).lastHourLabel==='about level','10:00 PM on 29 September: with the last-hour label it does not');
+
+      // Tide: the extreme that just passed, the direction, and the next two.
+      const tideRows=D.tides(fx.tides);check(tideRows.length===16,'tide fixture parsed');
+      let tide=D.tideState(tideRows,at('2026-09-29T19:20:00-07:00'));
+      check(tide.available&&tide.reason===null&&tide.last.type==='H'&&tide.last.t===at('2026-09-29T18:46:00-07:00')&&near(tide.last.v,8.168)&&tide.minutesSinceLast===34&&tide.direction==='falling','the 6:46 PM high tide is still shown at 7:20 PM');
+      check(tide.next.length===2&&tide.next[0].type==='L'&&tide.next[0].t===at('2026-09-30T01:56:00-07:00')&&near(tide.next[0].v,-1.224)&&tide.next[1].type==='H'&&tide.next[1].t===at('2026-09-30T09:13:00-07:00'),'the next two tide extremes');
+      tide=D.tideState(tideRows,at('2026-09-29T18:46:00-07:00'));check(tide.last.type==='H'&&tide.minutesSinceLast===0&&tide.direction==='falling'&&tide.next[0].type==='L','an extreme exactly at the check time has passed');
+      tide=D.tideState(tideRows,at('2026-09-29T18:45:00-07:00'));check(tide.last.type==='L'&&near(tide.last.v,4.593)&&tide.direction==='rising'&&tide.next[0].type==='H'&&tide.next[0].t===at('2026-09-29T18:46:00-07:00'),'one minute before the high the tide is still rising');
+      tide=D.tideState([...tideRows].reverse(),at('2026-09-29T19:20:00-07:00'));check(tide.last.t===at('2026-09-29T18:46:00-07:00')&&tide.next.length===2,'tide rows in any order');
+      for(const bad of [null,undefined,[],{},[{t:'x',v:1,type:'H'},{t:T+H,v:NaN,type:'H'},{t:T+2*H,v:1,type:'X'}]]){tide=D.tideState(bad,T);check(!tide.available&&tide.last===null&&tide.direction===null&&tide.next.length===0&&typeof tide.reason==='string','missing or failed tide feed is unavailable, not an empty list');}
+      tide=D.tideState(tideRows,at('2026-10-02T00:00:00Z'));check(!tide.available&&tide.next.length===0&&typeof tide.reason==='string','predictions that end before the check time are unavailable');
+      tide=D.tideState(tideRows,at('2026-09-27T12:00:00Z'));check(tide.available&&tide.last===null&&tide.minutesSinceLast===null&&tide.direction===null&&tide.next.length===2&&typeof tide.reason==='string','predictions that start after the check time give no direction');
+      tide=D.tideState(tideRows.filter(r=>r.t!==at('2026-09-30T08:56:00Z')),at('2026-09-29T19:20:00-07:00'));check(tide.available&&tide.direction===null&&tide.last.type==='H'&&tide.next[0].type==='H'&&typeof tide.reason==='string','a list whose highs and lows do not alternate gives no direction');
+      check(!D.tideState(tideRows,NaN).available&&!D.tideState([tideRows[0],{...tideRows[0]}],tideRows[0].t-H).available,'invalid check time or duplicate tide times fail closed');
+      let request=D.tideRequest(at('2026-09-30T02:20:00Z'));check(request.beginDate==='20260929'&&request.rangeHours===192,'tide request starts on the GMT date 24 hours back');
+      check(D.tideRequest(at('2026-09-30T00:00:00Z')).beginDate==='20260929'&&D.tideRequest(at('2026-09-29T23:59:00Z')).beginDate==='20260928'&&D.tideRequest(NaN)===null&&D.tideRequest(null)===null,'tide request date boundary');
+      for(const hour of [0,7,13,23.9]){const now=at('2026-01-01T00:00:00Z')+hour*H;request=D.tideRequest(now);const begin=Date.UTC(+request.beginDate.slice(0,4),+request.beginDate.slice(4,6)-1,+request.beginDate.slice(6,8));check(begin<=now-24*H&&begin>now-48*H&&begin+request.rangeHours*H>=now+6*24*H,'tide request reaches 24 to 48 hours back and 6 days ahead');}
+
+      // Rain: missing against zero, the suspect-zero flag, and the dry season.
+      check(D.rainBlockState({complete:true,mm:0}).status==='zero'&&D.rainBlockState({complete:true,mm:0}).mm===0,'a complete block of exactly zero rain is zero');
+      check(D.rainBlockState({complete:true,mm:2.54}).status==='amount'&&D.rainBlockState({complete:true,mm:2.54}).mm===2.54,'a complete block with rain is an amount');
+      for(const bin of [null,undefined,{},{complete:false,mm:null},{complete:false,mm:0},{complete:true,mm:null},{complete:true,mm:-1},{complete:true,mm:'0'},{complete:true,mm:NaN},{complete:'yes',mm:0}]){const block=D.rainBlockState(bin);check(block.status==='missing'&&block.mm===null,'a block with no value is missing, never zero');}
+      const feed=D.rain({properties:{updateTime:iso(T-H),quantitativePrecipitation:{uom:'wmoUnit:mm',values:[{validTime:iso(T)+'/PT6H',value:0},{validTime:iso(T+6*H)+'/PT6H',value:null},{validTime:iso(T+12*H)+'/PT6H',value:5.08}]}}},T);
+      check(D.rainBins(feed,T,24,6).map(bin=>D.rainBlockState(bin).status).join()==='zero,missing,amount,missing','forecast blocks: zero, no value, an amount, and no coverage');
+      const NL=String.fromCharCode(10), windows=total=>'0.00 0.00 0.00 0.00 '+(total===null?'M':total.toFixed(2))+' 9.00 9.00';   // 1, 3, 6, 12, 24, 48 and 72 hours
+      const report=(padilla,burlington,sedro)=>D.rrmRain({issuanceTime:iso(T-H/2),productCode:'RRM',issuingOffice:'KSEW',productText:['000','RRMSEW','National Weather Service Seattle WA','','Padilla Bay Farm '+windows(padilla),'Burlington '+windows(burlington),'Sedro Wooley RAWS '+windows(sedro),''].join(NL)},T);
+      let zero=D.suspectZeroRain(report(0.30,0.25,0));check(zero.evaluated&&zero.flags.join()==='false,false,true'&&zero.totals24In.join()==='0.3,0.25,0','a gauge at zero while both others report 0.25 inch or more is suspect');
+      check(D.suspectZeroRain(report(0,0.25,0.25)).flags.join()==='true,false,false'&&D.suspectZeroRain(report(0.5,0,1)).flags.join()==='false,true,false','the flag follows whichever gauge reads zero');
+      zero=D.suspectZeroRain(report(0.30,0.24,0));check(zero.evaluated&&!zero.flags.includes(true),'no flag when one of the others is under 0.25 inch');
+      check(!D.suspectZeroRain(report(0.30,0.01,0.01)).flags.includes(true)&&!D.suspectZeroRain(report(0,0,0.50)).flags.includes(true)&&!D.suspectZeroRain(report(0,0,0)).flags.includes(true),'no flag for a small amount, for two zeros, or for a dry day');
+      zero=D.suspectZeroRain(report(0,0.30,null));check(!zero.evaluated&&!zero.flags.includes(true)&&zero.totals24In[2]===null,'no flag when a gauge has no 24-hour total');
+      zero=D.suspectZeroRain(report(0.30,0.25,null));check(!zero.evaluated&&!zero.flags.includes(true),'a missing total is not a zero');
+      const partial=report(0,0.30,0.30);partial.stations[1]={...partial.stations[1],available:false};
+      check(!D.suspectZeroRain(partial).evaluated&&!D.suspectZeroRain(partial).flags.includes(true),'no flag when a gauge row is unavailable');
+      check(!D.suspectZeroRain({...report(0,0.30,0.30),stations:report(0,0.30,0.30).stations.slice(0,2)}).flags.includes(true),'no flag unless all three gauges are listed');
+      zero=D.suspectZeroRain(null);check(!zero.evaluated&&zero.flags.length===0&&zero.totals24In.length===0,'no observed-rain report: nothing is flagged');
+      check(D.drySeasonContext(at('2026-05-01T06:30:00Z'))===false&&D.drySeasonContext(at('2026-05-01T07:30:00Z'))===true,'dry-season context starts at Pacific midnight on 1 May');
+      check(D.drySeasonContext(at('2026-11-01T06:30:00Z'))===true&&D.drySeasonContext(at('2026-11-01T07:30:00Z'))===false,'dry-season context ends at Pacific midnight on 1 November');
+      check(D.drySeasonContext(at('2026-01-15T20:00:00Z'))===false&&D.drySeasonContext(T)===true&&D.drySeasonContext(NaN)===null&&D.drySeasonContext('2026-07-01')===null,'dry-season context by month, and null for an invalid time');
+
+      // The look-back counts. Each number below was checked against the look-back's own printed output.
+      const E=D.EVIDENCE;
+      check(Object.isFrozen(E)&&Object.isFrozen(E.pause)&&Object.isFrozen(E.timing)&&Object.isFrozen(E.timing.all)&&Object.isFrozen(E.timing.all.middleHalfHours)&&Object.isFrozen(E.wait.medianMoreHours)&&Object.isFrozen(E.rainContext),'evidence is frozen at every level');
+      check(E.caveat==='A look-back on past years, not a forecast.','evidence says it is a look-back, not a forecast');
+      check(E.rises.count===172&&E.rises.period==='2011 to 2023'&&E.rises.readings==='15-minute readings','172 rises, 2011 to 2023, 15-minute readings');
+      check(E.pause.rises===172&&E.pause.higherAgain===67&&E.pause.higherByMoreThan5Percent===42&&E.pause.withinHours===24&&E.pause.afterMinutes===R.pauseMinutes,'pause: 67 and 42 of 172');
+      check(E.peak2h.rises===172&&E.peak2h.within12h===19&&E.peak2h.within24h===30&&E.peak2h.afterMinutes===R.peakMinutes,'two hours without a new high: 19 and 30 of 172');
+      check(E.peak2h.aboutOneIn12h===9&&E.peak2h.aboutOneIn24h===6&&E.peak2h.aboutOneIn12h===Math.round(172/19)&&E.peak2h.aboutOneIn24h===Math.round(172/30),'two-hour odds follow from the counts');
+      check(E.falling.rises===172&&E.falling.within12h===10&&E.falling.within24h===21&&E.falling.belowHighFraction===R.fallingFraction,'5% below the high: 10 and 21 of 172');
+      check(E.falling.aboutOneIn12h===17&&E.falling.aboutOneIn24h===8&&E.falling.aboutOneIn12h===Math.round(172/10)&&E.falling.aboutOneIn24h===Math.round(172/21),'falling odds follow from the counts');
+      check(E.timing.all.rises===172&&E.timing.all.medianHours===5.5&&E.timing.all.middleHalfHours.join()==='3,9'&&E.timing.all.middleHalfHoursAsComputed.join()==='3.2,9.1'&&E.timing.all.under2h===18&&E.timing.all.atLeast16h===22,'timing, all seasons');
+      check(E.timing.dry.rises===52&&E.timing.dry.medianHours===6&&E.timing.dry.medianHoursAsComputed===5.9&&E.timing.dry.middleHalfHours.join()==='3.5,8'&&E.timing.dry.middleHalfHoursAsComputed.join()==='3.4,8.1'&&E.timing.dry.over8h===13&&E.timing.dry.atLeast16h===5,'timing, May to October');
+      const half=value=>Math.round(value*2)/2;
+      check(E.timing.all.middleHalfHoursAsComputed.map(half).join()===E.timing.all.middleHalfHours.join()&&E.timing.dry.middleHalfHoursAsComputed.map(half).join()===E.timing.dry.middleHalfHours.join()&&half(E.timing.dry.medianHoursAsComputed)===E.timing.dry.medianHours,'rounded timing figures are the computed ones to the nearest half hour');
+      check(E.wait.stagesHours.join()==='0,2,4,6,8,12'&&E.wait.risesStillWaiting.join()==='167,150,109,74,49,29'&&E.wait.medianMoreHours.join()==='5.5,4,3.5,4,5.8,7'&&E.wait.upperQuartileMoreHours.join()==='9.4,8,8.8,11.9,12.8,13.8','wait figures at each stage');
+      check(E.wait.typicalWaitHours[0]===Math.min(...E.wait.medianMoreHours)&&E.wait.typicalWaitHours[1]===Math.max(...E.wait.medianMoreHours)&&E.wait.typicalWaitHours.join()==='3.5,7'&&E.wait.oneInFourAtLeastHours===Math.min(...E.wait.upperQuartileMoreHours)&&E.wait.oneInFourAtLeastHours===8,'typical wait 3.5 to 7 hours; one rise in four needed 8 or more');
+      check(E.aligned.rises===66&&E.aligned.falseAlertEpisodesAligned===29&&E.aligned.falseAlertEpisodesAsIssued===38&&E.aligned.warned12hEitherWay===36&&E.aligned.leadHours===12&&E.aligned.period==='October 2020 to September 2026','gauge-aligned: 29 against 38 false-alert episodes, 66 rises');
+      check(E.noaaDry.rises===32&&E.noaaDry.shown12hAhead===25&&E.noaaDry.notShown===7&&E.noaaDry.shown12hAhead+E.noaaDry.notShown===E.noaaDry.rises&&E.noaaDry.notShownIncludes==='29 September 2026'&&E.noaaDry.leadHours===12,'NOAA in the dry season: 25 of 32, not 7');
+      const C=E.rainContext;
+      check(C.thresholdIn===0.75&&C.windowHours===24&&C.occasions===45&&C.followed===23&&C.followedWithinHours===36&&C.riseCfs===100&&C.perSeason===5&&C.perSeason===Math.round(C.occasions/C.seasons),'rain context: 45 occasions, 23 followed, about 5 a season');
+      check(C.withNoNoaaRise===26&&C.withNoNoaaRiseFollowed===7&&C.aboutOneInWithNoNoaaRise===4&&C.aboutOneInWithNoNoaaRise===Math.round(26/7)&&C.risesNoaaDidNotShow===E.noaaDry.notShown&&C.ofThoseRainForecastAhead===4&&C.leadHours===12&&C.aheadYears==='2024 to 2026'&&C.aheadIncludes==='29 September 2026'&&C.risesWithForecast===32&&C.risesWithLessRain===10,'rain context: 7 of 26, 4 of the 7, 10 of 32');
+      for(const key of ['pause','peak2h','falling','timing','wait','aligned','noaaDry','rainContext']){const entry=E[key];check(typeof entry.period==='string'&&entry.period.length>3&&typeof entry.source==='string'&&entry.source.startsWith('Look-back')&&entry.source.length>60&&!['/',String.fromCharCode(92),'.txt','.py','.md','.json','C:'].some(piece=>entry.source.includes(piece)),'evidence entry names its look-back in plain words: '+key);}
+      return count;
+    }""", {'readings': sept29_readings(), 'tides': SEPT29_TIDES})
     assert page.locator('#flow').inner_text() == '101'
     assert page.locator('#rain-total').inner_text() == '0.80'
     assert 'not basin-wide rain' in page.locator('.context-grid .measurement-limit').inner_text()
@@ -865,7 +1193,7 @@ with sync_playwright() as p:
     motion_page.close()
     assert not errors, errors
     axe_note = f'; {axe_runs} axe-core panel audits' if axe_runs else ''
-    print(f'PASS: {result} numerical contracts; live UI fixtures, storage, failure isolation, keyboard, clipboard and 30 responsive/dark panel checks{axe_note}. Screenshots: {out}')
+    print(f'PASS: {result + v7_result} numerical contracts ({result} from version 6 and earlier, {v7_result} for the version 7 river, forecast, tide, rain and look-back rules); live UI fixtures, storage, failure isolation, keyboard, clipboard and 30 responsive/dark panel checks{axe_note}. Screenshots: {out}')
     browser.close()
 if SERVER:
     SERVER.shutdown()
