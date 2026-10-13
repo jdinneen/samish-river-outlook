@@ -6,8 +6,21 @@ Buildless HTML, CSS and JavaScript. Each browser requests public river, forecast
 rain, radar, gauge-upstream drainage-area and tide sources directly. There is no runtime package,
 tracking, account, backend, automated alert or background monitor.
 
-The source contains published version 5. `version.json` is the machine-readable
+The source contains published version 6. `version.json` is the machine-readable
 receipt that binds the public release to its asset commit and file hashes.
+
+## Version 6
+
+Version 6 keeps every Version 5 calculation and evidence boundary, while making
+the operating view easier to scan:
+
+- replaces developer-facing browser, profile and storage messages with concise
+  operating language;
+- collapses the earlier-forecast metrics when no valid comparison exists;
+- places the river, forecast and seasonal-summary cards before the optional
+  storm-check form; and
+- tests each visible tab for the removed internal wording at desktop and phone
+  widths, including the save-unavailable state.
 
 ## Version 5
 

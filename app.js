@@ -100,7 +100,7 @@
   function radarSourceCard() {
     const product = RADAR_PRODUCTS[radar.product], unavailable = !!radar.error || !!radar.imageError || !radar.capabilities, partial = !unavailable && !!radar.legendError;
     const status = unavailable ? 'Unavailable' : partial ? 'Partial' : 'Retrieved';
-    const detail = unavailable ? radar.error || radar.imageError || 'Radar metadata unavailable' : product.label + ' valid ' + date(radar.validTime) + '. Product-valid time—not browser request time.';
+    const detail = unavailable ? radar.error || radar.imageError || 'Radar metadata unavailable' : product.label + ' valid ' + date(radar.validTime) + '. This is the radar product time—not the page-check time.';
     const legend = radar.legendError ? ' Official legend unavailable.' : radar.legendLoaded ? ' Official legend retrieved.' : ' Official legend pending.';
     return '<article id="radar-source-card" class="card source-card"><h2>National Weather Service KATX radar</h2><span class="pill ' + (unavailable || partial ? 'caution' : 'neutral') + '">' + status + '</span><p class="detail">' + esc(detail) + '</p><p class="meta">' + esc(radar.retrievedAt ? 'Capabilities retrieved ' + date(radar.retrievedAt) + '.' + legend : radar.requestedAt ? 'Capabilities requested ' + date(radar.requestedAt) + '.' : 'Radar metadata has not been requested yet.') + '</p><a href="' + RADAR_PAGE + '" target="_blank" rel="noopener">Inspect official radar ↗</a></article>';
   }
@@ -201,7 +201,7 @@
   async function load() {
     if (busy) return;
     busy = true; $('refresh').disabled = true; $('main').setAttribute('aria-busy', 'true');
-    put('update-status', 'Refreshing public feeds… Existing readings remain dated while requests finish.');
+    put('update-status', 'Checking the latest public data… Existing readings remain dated until the check finishes.');
     try {
     const requestTime = Date.now();
     sources[4].url = 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&station=9449211&begin_date=' + pacificDay(requestTime) + '&range=168&datum=MLLW&units=english&time_zone=gmt&interval=hilo&format=json&application=samish_outlook';
@@ -248,7 +248,7 @@
   }
   function render() {
     const { now, feeds, observations, direct, gaugeCopy, fc, rains, observedRain, tides, allTides, screen, watch, revision, history } = state, last = observations.at(-1);
-    put('update-status', 'Feed check completed ' + date(now) + ' · Automatic refresh is attempted every 10 minutes only while this page is open, visible and the device is awake. No notifications are sent.');
+    put('update-status', 'Data checked ' + date(now) + ' · Updates about every 10 minutes while this page is on screen. No alerts are sent.');
     const problems = [];
     if (!last || now - last.t > 2 * H) problems.push('The gauge is ' + (last ? 'stale' : 'unavailable'));
     if (!fc.usable) problems.push('the river forecast is unavailable');
@@ -277,7 +277,7 @@
     put('forecast-time', !fc.usable ? fc.reason : fc.atStart && fc.atEnd ? 'Highest value occurs at both ends of the available window' : fc.atEnd ? 'Highest at the end · peak may be later' : fc.atStart ? 'Highest at the start of this forecast window' : 'Forecast high around ' + date(fc.firstMax));
     put('forecast-coverage', fc.usable ? (fc.startsAfterCheck ? 'Path begins ' + date(fc.start) + ' · ' + num((fc.start - now) / H) + ' h after this check; no check-time value was inserted. ' : '') + 'Available through ' + date(fc.end) + ' · ' + num(fc.hours) + ' h from this check.' + (fc.firstMax !== fc.lastMax ? ' The highest value occurs at more than one forecast time.' : '') : 'No forecast high or timing estimate is shown.');
     put('forecast-issue', fc.issued === null ? 'Issue time unavailable' : 'NOAA issued · ' + date(fc.issued));
-    put('forecast-revision', revision.usable ? 'Compared on the same next 24 hours, the latest NOAA issue’s high is ' + signed(revision.difference) + ' cfs versus the issue saved ' + date(revision.previousIssue) + '.' : revision.reason);
+    put('forecast-revision', revision.usable ? 'Across the same next 24 hours, the latest NOAA issue’s high is ' + signed(revision.difference) + ' cfs versus the earlier issue from ' + date(revision.previousIssue) + '.' : revision.reason);
     renderRainForecast(rains, now);
     renderObservedRain(observedRain);
     badge('tide-status', tides.length ? 'Predicted' : 'Unavailable', tides.length ? 'neutral' : 'caution');
@@ -333,18 +333,18 @@
     $('observed-rain-table').innerHTML = '<table><caption>Provisional rolling precipitation totals in inches from automated stations near the watershed. National Weather Service accuracy has not been verified.</caption><thead><tr><th scope="col">Station</th>' + windows.map(value => '<th scope="col">' + value + ' h</th>').join('') + '</tr></thead><tbody>' + report.stations.map(station => '<tr><th scope="row">' + esc(station.label) + '</th>' + windows.map((value, index) => '<td>' + (station.available && station.values[index] !== null ? station.values[index].toFixed(2) : 'Unavailable') + '</td>').join('') + '</tr>').join('') + '</tbody></table>';
   }
   function renderWatch(watch, history) {
-    const labels = { outpacing: 'ABOVE EARLIER PATH', 'above-prior': 'ABOVE EARLIER PATH', tracking: 'NOT ABOVE COMPARISON LINE', learning: 'BUILDING HISTORY', unknown: 'COMPARISON UNAVAILABLE' };
-    const titles = { outpacing: 'River is above an earlier saved NOAA path and still rising', 'above-prior': 'River is above an earlier saved NOAA path; near-3-hour change is not positive', tracking: 'Gauge is below the unvalidated positive comparison line', learning: 'This browser needs an older saved forecast', unknown: 'Saved-forecast comparison unavailable' };
+    const labels = { outpacing: 'ABOVE EARLIER FORECAST', 'above-prior': 'ABOVE EARLIER FORECAST', tracking: 'NOT ABOVE CHECK LINE', learning: 'NO EARLIER FORECAST', unknown: 'CHECK UNAVAILABLE' };
+    const titles = { outpacing: 'River is above the earlier NOAA forecast and still rising', 'above-prior': 'River is above the earlier NOAA forecast, but not rising now', tracking: 'River is not above the earlier-forecast check line', learning: 'No earlier forecast to compare yet', unknown: 'Earlier-forecast check unavailable' };
     $('surprise-watch').className = 'watch-card ' + (watch.code || 'unknown');
     badge('watch-state', labels[watch.code] || labels.unknown, watch.code === 'outpacing' || watch.code === 'above-prior' ? 'caution' : 'neutral');
     put('watch-title', titles[watch.code] || titles.unknown);
+    $('watch-metrics').hidden = !watch.snapshot;
     if (watch.snapshot) {
-      put('watch-detail', 'A gauge-aligned NOAA path saved ' + num(watch.age) + ' hours before this observation expected ' + num(watch.expected) + ' cfs. The gauge reads ' + num(watch.observed) + ' cfs (' + signed(watch.difference) + ' cfs), and changed ' + signed(watch.change3) + ' cfs over ' + num(watch.span3) + ' hours. The frozen comparison line is ' + num(watch.line) + ' cfs. This is not a risk or safety status, closure call, or all-clear.');
-      put('watch-source', 'Saved ' + date(watch.snapshot.capturedAt) + ' from NOAA issue ' + date(watch.snapshot.issueTime) + '. The 10% comparison line is an unvalidated experimental heuristic—not an alert threshold.');
+      put('watch-detail', 'An earlier NOAA forecast expected ' + num(watch.expected) + ' cfs at this time. The gauge reads ' + num(watch.observed) + ' cfs (' + signed(watch.difference) + ' cfs) and changed ' + signed(watch.change3) + ' cfs over ' + num(watch.span3) + ' hours. The check line is ' + num(watch.line) + ' cfs above the earlier forecast. This is not a closure, safety, or all-clear signal.');
+      put('watch-source', 'Earlier NOAA issue: ' + date(watch.snapshot.issueTime) + ' · first recorded here ' + date(watch.snapshot.capturedAt) + ' · ' + num(watch.age) + ' hours before this gauge reading. The check line is unvalidated and is not an alert threshold.');
     } else {
-      const recovery = history.status === 'available' ? ' Keep this tab visible or revisit it during weather so this browser profile can save NOAA issues. No refreshes occur while the tab is hidden or closed.' : ' Browser storage is unavailable or malformed; keeping the tab open cannot build history until storage works or the malformed local history is cleared.';
-      put('watch-detail', (watch.reason || 'No comparison is available.') + '.' + recovery);
-      put('watch-source', (history.status === 'available' ? history.snapshots.length : 0) + ' NOAA issue' + ((history.snapshots?.length || 0) === 1 ? '' : 's') + ' stored in this browser profile · retained up to 14 days · clearing browser data clears the history.');
+      put('watch-detail', watch.code === 'learning' ? 'An eligible NOAA forecast from 3–36 hours earlier is not available yet. Use the dated panels above to see which current data are available.' : 'The earlier-forecast check is unavailable. Use the dated panels above to see which current data are available.');
+      put('watch-source', history.status === 'available' ? 'Once this dashboard has an eligible forecast from an earlier check, the comparison appears automatically. Planning aid only—not an alert threshold.' : 'Earlier-forecast history cannot be read on this device. Other panels remain independent of this check; use their dated status labels.');
     }
     put('watch-expected', watch.expected === null || watch.expected === undefined ? '—' : num(watch.expected));
     put('watch-observed', watch.observed === null || watch.observed === undefined ? '—' : num(watch.observed));
@@ -389,7 +389,7 @@
       const groups = []; rows.forEach((r, i) => { if (!i || r.t - rows[i - 1].t > gap) groups.push([]); groups.at(-1).push(r); });
       return groups.map(g => g.length === 1 ? '<circle cx="' + x(g[0].t) + '" cy="' + y(g[0].q) + '" r="3" fill="' + color + '"/>' : '<path d="' + g.map((r, i) => (i ? 'L' : 'M') + x(r.t).toFixed(2) + ',' + y(r.q).toFixed(2)).join(' ') + '" fill="none" stroke="' + color + '" stroke-width="2.5"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>').join('');
     };
-    const desc = 'Flow in cubic feet per second. Observations cover the previous 48 hours where available. ' + (fc.usable ? 'NOAA forecast extends ' + num(fc.hours) + ' hours from this check; highest forecast value is ' + num(fc.max) + ' cfs.' + (fc.startsAfterCheck ? ' The forecast begins ' + num((fc.start - now) / H) + ' hours after check time, and that gap is left visible.' : '') : 'NOAA forecast unavailable.') + (saved.length ? ' An earlier eligible gauge-aligned path is shown separately.' : ' No eligible earlier saved path is available.');
+    const desc = 'Flow in cubic feet per second. Observations cover the previous 48 hours where available. ' + (fc.usable ? 'NOAA forecast extends ' + num(fc.hours) + ' hours from this check; highest forecast value is ' + num(fc.max) + ' cfs.' + (fc.startsAfterCheck ? ' The forecast begins ' + num((fc.start - now) / H) + ' hours after check time, and that gap is left visible.' : '') : 'NOAA forecast unavailable.') + (saved.length ? ' An earlier eligible NOAA forecast is shown separately after one gauge alignment.' : ' No eligible earlier NOAA forecast is available.');
     let svg = '<svg viewBox="0 0 ' + w + ' ' + h + '" role="img" aria-labelledby="flow-title flow-desc"><title id="flow-title">Samish river flow</title><desc id="flow-desc">' + esc(desc) + '</desc>';
     for (let i = 0; i <= 4; i++) { const q = max * i / 4; svg += '<line x1="' + l + '" x2="' + (w - right) + '" y1="' + y(q) + '" y2="' + y(q) + '" stroke="var(--line)"/><text x="' + (l - 7) + '" y="' + (y(q) + 4) + '" text-anchor="end">' + Math.round(q).toLocaleString('en-US') + '</text>'; }
     svg += '<text x="' + l + '" y="13">cfs</text><line x1="' + x(now) + '" x2="' + x(now) + '" y1="' + top + '" y2="' + (h - bottom) + '" stroke="var(--muted)" stroke-dasharray="3 4"/>';
@@ -397,7 +397,7 @@
     for (let i = 0; i < ticks.length; i++) svg += '<text x="' + x(ticks[i][0]) + '" y="' + (h - 16) + '" text-anchor="' + (i === 0 ? 'start' : i === ticks.length - 1 ? 'end' : 'middle') + '">' + ticks[i][1] + '</text>';
     svg += paths(saved, 6 * H, 'var(--saved)', '2 5') + paths(obs, 2 * H, 'var(--teal)', '') + paths(future, 6 * H, 'var(--navy)', '7 5') + '</svg>';
     $('flow-chart').className = ''; $('flow-chart').innerHTML = svg;
-    put('chart-description', (saved.length ? 'The dotted amber line is the earlier saved path after one gauge alignment. ' : 'No eligible earlier saved path is available yet. ') + 'NOAA’s current dashed forecast remains raw and unshifted. Gaps stay visible; 0 h is this page’s feed-check time.');
+    put('chart-description', (saved.length ? 'The dotted amber line is an earlier NOAA forecast after one gauge alignment. ' : 'No eligible earlier NOAA forecast is available yet. ') + 'NOAA’s current dashed forecast remains raw and unshifted. Gaps stay visible; 0 h is this page’s data-check time.');
   }
   function readStormLog() {
     try {
@@ -406,7 +406,7 @@
       const parsed = JSON.parse(raw);
       if (!Array.isArray(parsed) || parsed.length > 500) throw Error('Stored event log is malformed');
       return { available: true, records: parsed.map(D.stormRecord) };
-    } catch { return { available: false, records: [], reason: 'Browser storage is blocked or the saved event log is malformed. It was not overwritten.' }; }
+    } catch { return { available: false, records: [], reason: 'Storm checks cannot be opened on this device right now. Existing records, if any, were left unchanged.' }; }
   }
   function writeStormLog(records) {
     try {
@@ -414,7 +414,7 @@
       localStorage.setItem(STORM_LOG_KEY, JSON.stringify(clean));
       if (localStorage.getItem(STORM_LOG_KEY) === null) throw Error('Storage write could not be verified');
       return { available: true, records: clean };
-    } catch { return { available: false, records: [], reason: 'The event log could not be saved in this browser profile.' }; }
+    } catch { return { available: false, records: [], reason: 'This storm check could not be saved on this device.' }; }
   }
   function currentStormRecord(tag, note) {
     const last = state.observations.at(-1), threshold = D.thresholdAt(state.now), fullRain = state.rains.every(r => r?.fresh && r.complete);
@@ -431,14 +431,14 @@
   }
   function renderStormLog(message = '') {
     const log = readStormLog();
-    badge('storm-log-count', log.available ? log.records.length + ' saved' : 'Storage unavailable', log.available ? 'neutral' : 'caution');
+    badge('storm-log-count', log.available ? log.records.length + ' saved' : 'SAVE UNAVAILABLE', log.available ? 'neutral' : 'caution');
     $('storm-log-save').disabled = !log.available || !state;
     $('storm-log-export').disabled = !log.available || !log.records.length;
     $('storm-log-clear').disabled = !log.available || !log.records.length;
     put('storm-log-status', log.available ? message : log.reason);
-    if (!log.available) { $('storm-log-list').innerHTML = '<p class="measurement-limit"><strong>Nothing was changed.</strong> Enable browser storage or use Copy snapshot instead.</p>'; return; }
-    if (!log.records.length) { $('storm-log-list').innerHTML = '<p>No checks saved in this browser profile.</p>'; return; }
-    $('storm-log-list').innerHTML = '<div class="table-wrap" role="region" aria-label="Saved local storm checks" tabindex="0"><table><caption>Manual storm checks saved only in this browser profile, newest first.</caption><thead><tr><th scope="col">Saved</th><th scope="col">Moment / note</th><th scope="col">River</th><th scope="col">Forecast</th><th scope="col"><span class="sr-only">Delete</span></th></tr></thead><tbody>' + log.records.map(record => '<tr><td>' + esc(date(Date.parse(record.savedAt))) + '</td><td><strong>' + esc(record.tag) + '</strong>' + (record.note ? '<br><span>' + esc(record.note) + '</span>' : '') + '</td><td>' + (record.gaugeCfs === null ? 'Unavailable' : num(record.gaugeCfs) + ' cfs') + '<br><span class="meta">3 h: ' + (record.change3Cfs === null ? 'Unavailable' : signed(record.change3Cfs) + ' cfs') + '</span></td><td>' + (record.forecastHighCfs === null ? 'Unavailable' : num(record.forecastHighCfs) + ' cfs') + '<br><span class="meta">Rain: ' + (record.rain24MeanIn === null ? 'Unavailable' : record.rain24MeanIn.toFixed(2) + ' in.') + '</span></td><td><button class="delete-log" type="button" data-delete-log="' + esc(record.id) + '" aria-label="Delete check saved ' + esc(date(Date.parse(record.savedAt))) + '">Delete</button></td></tr>').join('') + '</tbody></table></div>';
+    if (!log.available) { $('storm-log-list').innerHTML = '<p class="measurement-limit"><strong>Nothing was changed.</strong> Use Copy snapshot instead, or try again later.</p>'; return; }
+    if (!log.records.length) { $('storm-log-list').innerHTML = '<p>No storm checks saved on this device.</p>'; return; }
+    $('storm-log-list').innerHTML = '<div class="table-wrap" role="region" aria-label="Saved storm checks" tabindex="0"><table><caption>Manual storm checks saved on this device, newest first.</caption><thead><tr><th scope="col">Saved</th><th scope="col">Moment / note</th><th scope="col">River</th><th scope="col">Forecast</th><th scope="col"><span class="sr-only">Delete</span></th></tr></thead><tbody>' + log.records.map(record => '<tr><td>' + esc(date(Date.parse(record.savedAt))) + '</td><td><strong>' + esc(record.tag) + '</strong>' + (record.note ? '<br><span>' + esc(record.note) + '</span>' : '') + '</td><td>' + (record.gaugeCfs === null ? 'Unavailable' : num(record.gaugeCfs) + ' cfs') + '<br><span class="meta">3 h: ' + (record.change3Cfs === null ? 'Unavailable' : signed(record.change3Cfs) + ' cfs') + '</span></td><td>' + (record.forecastHighCfs === null ? 'Unavailable' : num(record.forecastHighCfs) + ' cfs') + '<br><span class="meta">Rain: ' + (record.rain24MeanIn === null ? 'Unavailable' : record.rain24MeanIn.toFixed(2) + ' in.') + '</span></td><td><button class="delete-log" type="button" data-delete-log="' + esc(record.id) + '" aria-label="Delete check saved ' + esc(date(Date.parse(record.savedAt))) + '">Delete</button></td></tr>').join('') + '</tbody></table></div>';
   }
   function downloadBlob(contents, type, filename) {
     const blob = new Blob([contents], { type }), url = URL.createObjectURL(blob), link = document.createElement('a');
@@ -446,7 +446,7 @@
   }
   function brief() {
     const observedLines = state.observedRain ? state.observedRain.stations.map(station => station.label + ' rolling 24 h: ' + (station.values[4] === null ? 'Unavailable' : station.values[4].toFixed(2) + ' in.')) : ['Nearby observed-rain report unavailable'];
-    return ['Samish River Outlook — field-planning snapshot', 'Feed check: ' + date(state.now), '', 'RADAR CONTEXT: ' + $('radar-status').textContent, $('radar-frame-time').textContent, $('radar-product-note').textContent, 'Official KATX radar context; not used in a river, closure or safety calculation.', '', 'SAVED-FORECAST COMPARISON: ' + $('watch-state').textContent, $('watch-title').textContent, $('watch-detail').textContent, $('watch-source').textContent, '', 'Gauge: ' + $('flow').textContent + ' cfs · ' + $('gauge-status').textContent, $('gauge-time').textContent, 'About-24-hour change: ' + $('change24').textContent, 'Near-3-hour change: ' + $('change3').textContent, '', 'SEASONAL RISE COMPARISON: ' + $('rise-status').textContent, $('rise-title').textContent, $('rise-detail').textContent, '', 'NOAA forecast high: ' + $('forecast-high').textContent + ' cfs', $('forecast-time').textContent, $('forecast-coverage').textContent, $('forecast-issue').textContent, $('forecast-revision').textContent, '', $('crest-time').textContent, $('crest-detail').textContent, 'Next 24 h rain, mean of two forecast points: ' + $('rain-total').textContent + ' in. · ' + $('rain-status').textContent, $('rain-note').textContent, ...[...document.querySelectorAll('.rain-point')].map(el => el.innerText), '', 'NEARBY PROVISIONAL OBSERVED RAIN', state.observedRain ? 'Report issued ' + date(state.observedRain.issued) + '; issue time is not a measurement time.' : 'Report unavailable.', ...observedLines, '', 'Tides: Bellingham predictions, ft MLLW; not Samish Bay access clearance.', ...state.tides.map(r => (r.type === 'H' ? 'High ' : 'Low ') + r.v.toFixed(1) + ' ft · ' + date(r.t)), '', 'Official commercial status is not ingested. Check Washington Department of Health.', 'No confirmed crest, dispatch recommendation, closure call, artificial-intelligence warning, all-clear or reopening authorization. Use established procedures; the Department of Health makes closure and reopening decisions.', 'https://doh.wa.gov/commercialshellfishmap', 'https://jdinneen.github.io/samish-river-outlook/'].join('\n');
+    return ['Samish River Outlook — field-planning snapshot', 'Data checked: ' + date(state.now), '', 'RADAR CONTEXT: ' + $('radar-status').textContent, $('radar-frame-time').textContent, $('radar-product-note').textContent, 'Official KATX radar context; not used in a river, closure or safety calculation.', '', 'FORECAST CHANGE CHECK: ' + $('watch-state').textContent, $('watch-title').textContent, $('watch-detail').textContent, $('watch-source').textContent, '', 'Gauge: ' + $('flow').textContent + ' cfs · ' + $('gauge-status').textContent, $('gauge-time').textContent, 'About-24-hour change: ' + $('change24').textContent, 'Near-3-hour change: ' + $('change3').textContent, '', 'SEASONAL RISE COMPARISON: ' + $('rise-status').textContent, $('rise-title').textContent, $('rise-detail').textContent, '', 'NOAA forecast high: ' + $('forecast-high').textContent + ' cfs', $('forecast-time').textContent, $('forecast-coverage').textContent, $('forecast-issue').textContent, $('forecast-revision').textContent, '', $('crest-time').textContent, $('crest-detail').textContent, 'Next 24 h rain, mean of two forecast points: ' + $('rain-total').textContent + ' in. · ' + $('rain-status').textContent, $('rain-note').textContent, ...[...document.querySelectorAll('.rain-point')].map(el => el.innerText), '', 'NEARBY PROVISIONAL OBSERVED RAIN', state.observedRain ? 'Report issued ' + date(state.observedRain.issued) + '; issue time is not a measurement time.' : 'Report unavailable.', ...observedLines, '', 'Tides: Bellingham predictions, ft MLLW; not Samish Bay access clearance.', ...state.tides.map(r => (r.type === 'H' ? 'High ' : 'Low ') + r.v.toFixed(1) + ' ft · ' + date(r.t)), '', 'Official commercial status is not ingested. Check Washington Department of Health.', 'No confirmed crest, dispatch recommendation, closure call, artificial-intelligence warning, all-clear or reopening authorization. Use established procedures; the Department of Health makes closure and reopening decisions.', 'https://doh.wa.gov/commercialshellfishmap', 'https://jdinneen.github.io/samish-river-outlook/'].join('\n');
   }
   $('copy-brief').addEventListener('click', async () => {
     const text = brief();
@@ -469,7 +469,7 @@
       const result = writeStormLog([record, ...log.records.filter(row => Date.parse(row.savedAt) >= cutoff)].slice(0, 500));
       if (!result.available) { renderStormLog(); return; }
       $('storm-log-note').value = '';
-      renderStormLog('Saved this check locally at ' + date(Date.parse(record.savedAt)) + '.');
+      renderStormLog('Saved this check on this device at ' + date(Date.parse(record.savedAt)) + '.');
     } catch { put('storm-log-status', 'This check could not be saved. Nothing was changed.'); }
   });
   $('storm-log-export').addEventListener('click', () => {
@@ -480,8 +480,8 @@
   });
   $('storm-log-clear').addEventListener('click', () => {
     const log = readStormLog();
-    if (!log.available || !log.records.length || !window.confirm('Clear all saved Samish storm checks from this browser profile? This cannot be undone unless you exported them.')) return;
-    try { localStorage.removeItem(STORM_LOG_KEY); if (localStorage.getItem(STORM_LOG_KEY) !== null) throw Error('Clear could not be verified'); renderStormLog('All locally saved storm checks were cleared.'); }
+    if (!log.available || !log.records.length || !window.confirm('Clear all saved Samish storm checks from this device? This cannot be undone unless you exported them.')) return;
+    try { localStorage.removeItem(STORM_LOG_KEY); if (localStorage.getItem(STORM_LOG_KEY) !== null) throw Error('Clear could not be verified'); renderStormLog('All storm checks saved on this device were cleared.'); }
     catch { renderStormLog(); }
   });
   $('storm-log-list').addEventListener('click', event => {
@@ -492,7 +492,7 @@
     const kept = log.records.filter(record => record.id !== button.dataset.deleteLog);
     if (kept.length === log.records.length) { put('storm-log-status', 'That saved check was not found. Nothing was changed.'); return; }
     const result = writeStormLog(kept);
-    renderStormLog(result.available ? 'One locally saved check was deleted.' : '');
+    renderStormLog(result.available ? 'One saved check was deleted.' : '');
   });
   const tabs = [...document.querySelectorAll('[role="tab"]')];
   function select(tab) { for (const t of tabs) { const active = t === tab; t.setAttribute('aria-selected', String(active)); t.tabIndex = active ? 0 : -1; $(t.getAttribute('aria-controls')).hidden = !active; } if (tab.id === 'tab-outlook') chart(); }

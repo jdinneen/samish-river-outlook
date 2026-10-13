@@ -511,20 +511,20 @@
     return { code, reason, expected: null, observed: null, difference: null, line: null, change3: null, span3: null, snapshot: null };
   }
   function surpriseWatch(observation, snapshots, storageStatus = 'available') {
-    if (storageStatus !== 'available') return watchUnknown('Saved forecast history is unavailable on this device');
+    if (storageStatus !== 'available') return watchUnknown('Earlier-forecast comparison is unavailable on this device');
     if (!observation?.fresh) return watchUnknown('A recent gauge reading and a near-three-hour comparison are required');
     const observationTime = Number(observation.t), observed = number(observation.q), change3 = number(observation.change3), span3 = number(observation.span3);
     const threshold = thresholdAt(observationTime);
     if (!Number.isFinite(observationTime) || observed === null || observed < 0 || change3 === null || span3 === null || span3 < 2.5 || span3 > 3.5 || !threshold) return watchUnknown('The current gauge comparison did not pass timing and value checks');
-    if (!Array.isArray(snapshots)) return watchUnknown('Saved forecast history is malformed, so the comparison failed closed');
+    if (!Array.isArray(snapshots)) return watchUnknown('Earlier-forecast comparison is unavailable because its history could not be read');
     const normalized = [];
     for (const row of snapshots) {
       const snapshot = normalizeSnapshot(row);
-      if (!snapshot) return watchUnknown('Saved forecast history is malformed, so the comparison failed closed');
-      if (snapshot.issueTime > snapshot.capturedAt || snapshot.gaugeTime > snapshot.capturedAt) return watchUnknown('Saved forecast history has an inconsistent clock');
+      if (!snapshot) return watchUnknown('Earlier-forecast comparison is unavailable because its history could not be read');
+      if (snapshot.issueTime > snapshot.capturedAt || snapshot.gaugeTime > snapshot.capturedAt) return watchUnknown('Earlier-forecast comparison is unavailable because its times do not agree');
       normalized.push(snapshot);
     }
-    if (new Set(normalized.map(r => r.issueTime)).size !== normalized.length) return watchUnknown('Saved forecast history contains duplicate NOAA issues, so the comparison failed closed');
+    if (new Set(normalized.map(r => r.issueTime)).size !== normalized.length) return watchUnknown('Earlier-forecast comparison is unavailable because its history has duplicate entries');
     let pathFailure = false;
     const eligible = normalized.flatMap(snapshot => {
       const age = (observationTime - snapshot.capturedAt) / H;
@@ -533,9 +533,9 @@
       if (!expected) { pathFailure = true; return []; }
       return [{ snapshot, age, expected }];
     }).sort((a, b) => b.snapshot.capturedAt - a.snapshot.capturedAt);
-    if (pathFailure) return watchUnknown('An eligible saved path did not validly bracket the gauge reading');
+    if (pathFailure) return watchUnknown('The earlier forecast does not cover the current gauge time');
     if (!eligible.length) {
-      const result = watchUnknown('No saved path is between 3 and 36 hours old at this gauge time', 'learning');
+      const result = watchUnknown('No earlier forecast from 3–36 hours ago is available yet', 'learning');
       return { ...result, observed, change3, span3, line: threshold.cfs * WATCH.seasonalFraction, threshold };
     }
     const selected = eligible[0], expected = selected.expected.q, difference = observed - expected, line = threshold.cfs * WATCH.seasonalFraction;
@@ -547,18 +547,18 @@
   function forecastRevision(fc, snapshots, now) {
     const unavailable = (code, reason) => ({ usable: false, code, reason });
     if (!fc?.usable || fc.issued === null) return unavailable('unknown', 'The current NOAA forecast is unavailable');
-    if (!Array.isArray(snapshots)) return unavailable('unknown', 'Saved forecast history is malformed');
+    if (!Array.isArray(snapshots)) return unavailable('unknown', 'Earlier-forecast history could not be read');
     const normalized = [];
     for (const row of snapshots) {
       const snapshot = normalizeSnapshot(row);
-      if (!snapshot) return unavailable('unknown', 'Saved forecast history is malformed');
-      if (snapshot.issueTime > snapshot.capturedAt || snapshot.gaugeTime > snapshot.capturedAt) return unavailable('unknown', 'Saved forecast history has an inconsistent clock');
+      if (!snapshot) return unavailable('unknown', 'Earlier-forecast history could not be read');
+      if (snapshot.issueTime > snapshot.capturedAt || snapshot.gaugeTime > snapshot.capturedAt) return unavailable('unknown', 'Earlier-forecast times do not agree');
       normalized.push(snapshot);
     }
-    if (new Set(normalized.map(r => r.issueTime)).size !== normalized.length) return unavailable('unknown', 'Saved forecast history contains duplicate NOAA issues');
+    if (new Set(normalized.map(r => r.issueTime)).size !== normalized.length) return unavailable('unknown', 'Earlier-forecast history contains duplicate entries');
     const prior = normalized.filter(r => r.issueTime < fc.issued && r.capturedAt < now && now - r.capturedAt <= WATCH.maximumAgeHours * H)
       .sort((a, b) => b.issueTime - a.issueTime)[0];
-    if (!prior) return unavailable('learning', 'A previous NOAA issue has not been saved on this device yet');
+    if (!prior) return unavailable('learning', 'No earlier NOAA issue is available for comparison yet');
     const current = path(fc.rows), old = prior.rawPath, start = now, end = now + 24 * H;
     if (!current || !interpolateGap(current, start, 6) || !interpolateGap(current, end, 6) || !interpolateGap(old, start, 6) || !interpolateGap(old, end, 6)) return unavailable('unknown', 'The current and previous issues do not share a complete next-24-hour window');
     const times = [...new Set([start, end, ...current.filter(r => r.t > start && r.t < end).map(r => r.t), ...old.filter(r => r.t > start && r.t < end).map(r => r.t)])].sort((a, b) => a - b);

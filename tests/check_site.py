@@ -493,7 +493,13 @@ with sync_playwright() as p:
     assert page.locator('#radar-overlay').is_visible()
     assert page.locator('#radar-legend-wrap').is_visible()
     assert 'valid' in page.locator('#radar-loop').get_attribute('alt').lower()
-    assert page.locator('#watch-state').inner_text() == 'BUILDING HISTORY'
+    assert page.locator('#watch-state').inner_text() == 'NO EARLIER FORECAST'
+    assert page.locator('#watch-title').inner_text() == 'No earlier forecast to compare yet'
+    assert 'dated panels above' in page.locator('#watch-detail').inner_text()
+    assert page.locator('#watch-metrics').is_hidden()
+    assert 'browser' not in page.locator('#outlook').inner_text().lower()
+    assert 'profile' not in page.locator('#outlook').inner_text().lower()
+    assert page.evaluate("Boolean(document.querySelector('.summary-grid').compareDocumentPosition(document.querySelector('.storm-log')) & Node.DOCUMENT_POSITION_FOLLOWING)")
     axe_runs += audit_state('learning')
     screenshot_state('learning')
     assert page.locator('#rise-status').inner_text() == 'Experimental'
@@ -507,7 +513,7 @@ with sync_playwright() as p:
     assert page.locator('#update-status').is_visible()
     page.locator('#refresh').click()
     page.wait_for_function("!document.getElementById('refresh').disabled")
-    assert page.locator('#update-status').inner_text().startswith('Feed check completed')
+    assert page.locator('#update-status').inner_text().startswith('Data checked')
     page.locator('#tab-outlook').click()
     assert 'NOAA forecast high around' in page.locator('#crest-time').inner_text()
     assert page.locator('#crest-nearby .crest-tide').count() >= 1
@@ -548,8 +554,9 @@ with sync_playwright() as p:
     page.evaluate("value => localStorage.setItem('samish-river-outlook.forecast-snapshots.v1', JSON.stringify([value]))", saved_snapshot())
     page.locator('#refresh').click()
     page.wait_for_function("!document.getElementById('refresh').disabled")
-    assert page.locator('#watch-state').inner_text() == 'ABOVE EARLIER PATH'
-    assert 'This is not a risk or safety status' in page.locator('#watch-detail').inner_text()
+    assert page.locator('#watch-state').inner_text() == 'ABOVE EARLIER FORECAST'
+    assert 'not a closure, safety, or all-clear signal' in page.locator('#watch-detail').inner_text()
+    assert page.locator('#watch-metrics').is_visible()
     assert page.locator('#watch-expected').inner_text() == '80'
     assert page.locator('#watch-observed').inner_text() == '101'
     assert page.locator('#watch-change').inner_text() == '+4'
@@ -570,22 +577,22 @@ with sync_playwright() as p:
     download = download_info.value
     snapshot_text = Path(download.path()).read_text(encoding='utf-8')
     assert download.suggested_filename.startswith('samish-field-snapshot-')
-    assert 'SAVED-FORECAST COMPARISON: ABOVE EARLIER PATH' in snapshot_text, repr(snapshot_text[:500])
+    assert 'FORECAST CHANGE CHECK: ABOVE EARLIER FORECAST' in snapshot_text, repr(snapshot_text[:500])
     assert 'Official commercial status is not ingested' in snapshot_text
     assert 'https://doh.wa.gov/commercialshellfishmap' in snapshot_text
 
     page.evaluate("value => localStorage.setItem('samish-river-outlook.forecast-snapshots.v1', JSON.stringify([value]))", saved_snapshot(95))
     page.locator('#refresh').click()
     page.wait_for_function("!document.getElementById('refresh').disabled")
-    assert page.locator('#watch-state').inner_text() == 'NOT ABOVE COMPARISON LINE'
-    assert 'not a risk or safety status' in page.locator('#watch-detail').inner_text()
+    assert page.locator('#watch-state').inner_text() == 'NOT ABOVE CHECK LINE'
+    assert 'not a closure, safety, or all-clear signal' in page.locator('#watch-detail').inner_text()
     axe_runs += audit_state('tracking')
     screenshot_state('tracking')
 
     page.evaluate("value => localStorage.setItem('samish-river-outlook.forecast-snapshots.v1', JSON.stringify([value]))", saved_snapshot(250))
     page.locator('#refresh').click()
     page.wait_for_function("!document.getElementById('refresh').disabled")
-    assert page.locator('#watch-state').inner_text() == 'NOT ABOVE COMPARISON LINE'
+    assert page.locator('#watch-state').inner_text() == 'NOT ABOVE CHECK LINE'
     assert 'NEAR' not in page.locator('#watch-state').inner_text()
 
     page.evaluate("value => localStorage.setItem('samish-river-outlook.forecast-snapshots.v1', JSON.stringify([value]))", saved_snapshot())
@@ -594,8 +601,8 @@ with sync_playwright() as p:
     observed_minus_three['primary'] = .110
     page.locator('#refresh').click()
     page.wait_for_function("!document.getElementById('refresh').disabled")
-    assert page.locator('#watch-state').inner_text() == 'ABOVE EARLIER PATH'
-    assert 'not positive' in page.locator('#watch-title').inner_text()
+    assert page.locator('#watch-state').inner_text() == 'ABOVE EARLIER FORECAST'
+    assert 'not rising now' in page.locator('#watch-title').inner_text()
     axe_runs += audit_state('above-saved-path')
     screenshot_state('above-saved-path')
     observed_minus_three['primary'] = original_minus_three
@@ -605,7 +612,7 @@ with sync_playwright() as p:
     page.evaluate("value => localStorage.setItem('samish-river-outlook.forecast-snapshots.v1', JSON.stringify([value]))", saved_snapshot())
     page.locator('#refresh').click()
     page.wait_for_function("!document.getElementById('refresh').disabled")
-    assert page.locator('#watch-state').inner_text() == 'ABOVE EARLIER PATH'
+    assert page.locator('#watch-state').inner_text() == 'ABOVE EARLIER FORECAST'
     page.locator('#tab-outlook').focus()
     page.keyboard.press('ArrowRight')
     assert page.locator('#research').is_visible()
@@ -624,7 +631,7 @@ with sync_playwright() as p:
     page.locator('#refresh').click()
     page.wait_for_function("!document.getElementById('refresh').disabled")
     assert page.locator('#brief-fallback').is_hidden()
-    assert page.locator('#watch-state').inner_text() == 'ABOVE EARLIER PATH'
+    assert page.locator('#watch-state').inner_text() == 'ABOVE EARLIER FORECAST'
     mode['radar_fail'] = True
     page.locator('#radar-toggle').click()
     page.wait_for_function("document.getElementById('radar-status').textContent === 'Unavailable'")
@@ -647,6 +654,10 @@ with sync_playwright() as p:
             for tab in ['outlook', 'research', 'sources']:
                 page.locator('#tab-' + tab).click()
                 assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), (scheme, width, tab, 'overflow')
+                if width in [390, 1440]:
+                    panel_text = page.locator('#' + tab).inner_text().lower()
+                    assert 'browser' not in panel_text, (scheme, width, tab, 'browser language')
+                    assert 'profile' not in panel_text, (scheme, width, tab, 'profile language')
                 if width == 390 and tab == 'outlook':
                     assert page.locator('#ops-strip, .ops-strip').first.evaluate('el => el.getBoundingClientRect().top < 650')
                     page.wait_for_function("Math.abs(document.querySelector('#rain-chart svg').viewBox.baseVal.width - document.querySelector('#rain-chart svg').getBoundingClientRect().width) <= 2")
@@ -714,14 +725,14 @@ with sync_playwright() as p:
     assert page.locator('#flow').inner_text() == '100'
     assert 'NOAA copy' in page.locator('#observation-note').inner_text()
     assert 'No direct USGS reading' in page.locator('#source-status').inner_text()
-    assert page.locator('#watch-state').inner_text() == 'ABOVE EARLIER PATH'
+    assert page.locator('#watch-state').inner_text() == 'ABOVE EARLIER FORECAST'
     payload['rain']['properties']['quantitativePrecipitation']['values'][0]['value'] = None
     payload['nwps']['forecast']['data'] = payload['nwps']['forecast']['data'][:4]
     page.locator('#refresh').click()
     page.wait_for_function("!document.getElementById('refresh').disabled")
     assert page.locator('#rain-total').inner_text() == '—'
     assert page.locator('#forecast-status').inner_text() == 'Shorter horizon'
-    assert page.locator('#watch-state').inner_text() == 'ABOVE EARLIER PATH'
+    assert page.locator('#watch-state').inner_text() == 'ABOVE EARLIER FORECAST'
     payload['rain']['properties']['quantitativePrecipitation']['values'][0]['value'] = 0
     payload['rain']['properties']['updateTime'] = ISO(-25)
     payload['nwps']['forecast']['issuedTime'] = ISO(-49)
@@ -732,7 +743,7 @@ with sync_playwright() as p:
     assert page.locator('#rise-status').inner_text() == 'Unavailable'
     assert 'current usable NOAA forecast' in page.locator('#rise-title').inner_text()
     assert 'Stale' in page.locator('#rain-points').inner_text()
-    assert page.locator('#watch-state').inner_text() == 'ABOVE EARLIER PATH'
+    assert page.locator('#watch-state').inner_text() == 'ABOVE EARLIER FORECAST'
     mode['fail'] = True
     page.locator('#refresh').click()
     page.wait_for_function("!document.getElementById('refresh').disabled")
@@ -741,7 +752,9 @@ with sync_playwright() as p:
     assert 'radar image unavailable' in failed_radar_alt and 'valid' not in failed_radar_alt
     for ident in ['flow', 'forecast-high', 'rain-total']:
         assert page.locator('#' + ident).inner_text() == '—', ident
-    assert page.locator('#watch-state').inner_text() == 'COMPARISON UNAVAILABLE'
+    assert page.locator('#watch-state').inner_text() == 'CHECK UNAVAILABLE'
+    assert 'dated panels above' in page.locator('#watch-detail').inner_text()
+    assert 'still work' not in page.locator('#watch-detail').inner_text()
     assert page.locator('#rise-status').inner_text() == 'Unavailable'
     assert page.locator('#flow-chart svg').count() == 0
     assert 'unavailable' in page.locator('#tide-list').inner_text().lower() or 'No upcoming' in page.locator('#tide-list').inner_text()
@@ -804,7 +817,7 @@ with sync_playwright() as p:
     assert basin_parse_page.locator('#rain-total').inner_text() == '0.80'
     basin_parse_page.close()
 
-    # Browser storage denial disables only the local record and comparison tools.
+    # Device save denial disables only the local record and comparison tools.
     storage_context = browser.new_context(viewport={'width': 390, 'height': 960})
     storage_context.add_init_script("""(() => {
       for (const method of ['getItem','setItem','removeItem']) Object.defineProperty(Storage.prototype, method, {value(){throw new DOMException('blocked','SecurityError')}});
@@ -814,10 +827,13 @@ with sync_playwright() as p:
     storage_page.emulate_media(color_scheme='dark')
     storage_page.goto(URL)
     storage_page.wait_for_function("!document.getElementById('refresh').disabled")
-    assert storage_page.locator('#storm-log-count').inner_text() == 'Storage unavailable'
+    assert storage_page.locator('#storm-log-count').inner_text() == 'SAVE UNAVAILABLE'
     assert storage_page.locator('#storm-log-save').is_disabled()
     assert storage_page.locator('#flow').inner_text() == '101'
-    assert 'cannot build history until storage works' in storage_page.locator('#watch-detail').inner_text()
+    assert storage_page.locator('#watch-state').inner_text() == 'CHECK UNAVAILABLE'
+    assert 'earlier-forecast check is unavailable' in storage_page.locator('#watch-detail').inner_text().lower()
+    assert 'browser' not in storage_page.locator('#outlook').inner_text().lower()
+    assert 'storage' not in storage_page.locator('#outlook').inner_text().lower()
     storage_page.screenshot(path=str(out / 'storage-unavailable-dark-390.png'), full_page=True)
     if axe_path:
         storage_page.add_script_tag(path=axe_path)
@@ -832,8 +848,8 @@ with sync_playwright() as p:
     malformed_page.route('**/*', route)
     malformed_page.goto(URL)
     malformed_page.wait_for_function("!document.getElementById('refresh').disabled")
-    assert malformed_page.locator('#storm-log-count').inner_text() == 'Storage unavailable'
-    assert 'not overwritten' in malformed_page.locator('#storm-log-status').inner_text()
+    assert malformed_page.locator('#storm-log-count').inner_text() == 'SAVE UNAVAILABLE'
+    assert 'left unchanged' in malformed_page.locator('#storm-log-status').inner_text()
     assert malformed_page.evaluate("localStorage.getItem('samish-river-outlook.storm-checks.v1')") == '{malformed'
     malformed_page.screenshot(path=str(out / 'storage-malformed-390.png'), full_page=True)
     malformed_context.close()
