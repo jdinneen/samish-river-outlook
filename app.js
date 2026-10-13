@@ -299,11 +299,11 @@
     put('feed-alert', [clockBehind ? cannotTellSentence(river) : '', problemText ? problemText.charAt(0).toUpperCase() + problemText.slice(1) + '. Check the dated source details before planning.' : ''].filter(Boolean).join(' '));
     const onlyFalls = fc.usable && noaa.pathOnlyFalls === true;
     const riverSaid = renderRiver(river, anchor, now), compared = renderNoaa(noaa, river, now);
-    // NOAA's peak-time words (a forecast-high time, "forecast to fall") appear ONLY when a comparison was made and the
+    // NOAA's peak-time words (a forecast-high time, "falls from its first value") appear ONLY when a comparison was made and the
     // gauge is not above the line. Otherwise one of two sentences says why no peak time is read.
     const peakWithheld = compared.compare === 'within' ? null : compared.compare === 'above' ? NO_PEAK_ABOVE : NO_PEAK_UNCOMPARED;
     renderTide(tide, now);
-    announce([[[river.staleCode || 'fresh', river.riseStatus, river.riseStart?.atOrBefore ? 'at-or-before' : river.state].join('|'), riverSaid], [noaa.code + '|' + compared.compare, compared.said]]);
+    announce([[[river.staleCode || 'fresh', river.riseStatus, river.riseStart?.atOrBefore ? 'at-or-before' : upOnThreeHours(river) ? 'no-new-high-but-up-on-three-hours' : river.state].join('|'), riverSaid], [noaa.code + '|' + compared.compare, compared.said]]);
     put('observation-note', 'Flow in cubic feet per second (cfs) · U.S. Geological Survey (USGS) station 12201500 · provisional observations, subject to revision' + (last ? ' · ' + last.source : ''));
     const threshold = D.thresholdAt(now);
     put('ops-threshold', threshold ? threshold.cfs + ' cfs' : 'Unavailable');
@@ -325,7 +325,7 @@
     badge('tide-status', tide.available ? 'Predicted' : 'Unavailable', tide.available ? 'neutral' : 'caution');
     const listed = tideList();
     $('tide-list').innerHTML = listed.length ? listed.map(r => '<div class="tide-row"><span>' + (r.type === 'H' ? 'High' : 'Low') + '</span><strong>' + feet(r.v) + '<span class="small-label">ft MLLW</span></strong><time datetime="' + new Date(r.t).toISOString() + '">' + esc(date(r.t)) + (r.passed ? ' · passed' : '') + '</time></div>').join('') : 'Tide predictions unavailable. Use the official tide source.';
-    renderCrest(fc, tideRows, peakWithheld);
+    renderCrest(fc, tideRows, peakWithheld, onlyFalls, now);
     const directLast = [...direct].sort((a, b) => a.t - b.t).at(-1);
     const sourceTimes = [(fc.issued === null ? 'Forecast issue time unavailable' : 'Forecast issued ' + date(fc.issued)) + (gaugeCopy.error ? ' · Gauge copy: ' + gaugeCopy.error : ''), directLast ? 'Latest direct USGS reading ' + date(directLast.t) : 'No direct USGS reading', ...rains.map(r => r ? 'Forecast updated ' + date(r.updated) : 'Update unavailable'), 'Astronomical high/low predictions; issue time not supplied', observedRain ? 'Product issued ' + date(observedRain.issued) + '; issue time is not a gauge measurement time' : 'Product issue time unavailable', state.basin ? 'Simplified gauge-upstream drainage area · ' + state.basin.pointCount + ' source vertices · based on whole NHDPlusV2 catchments' : 'Gauge-upstream drainage geometry unavailable'];
     $('source-status').innerHTML = feeds.map((f, i) => '<article class="card source-card"><h2>' + esc(f.name) + '</h2><span class="pill ' + (f.error ? 'caution' : 'neutral') + '">' + (f.error ? 'Feed problem' : 'Retrieved') + '</span><p class="detail">' + esc(sourceTimes[i]) + '</p><p class="meta">' + esc(f.error || 'Retrieved ' + date(f.retrieved)) + '</p><a href="' + esc(f.url) + '" target="_blank" rel="noopener">Inspect public feed ↗</a></article>').join('') + radarSourceCard();
@@ -353,6 +353,9 @@
   // 100% is printed only once the number is reached.
   const shareText = fraction => Math.floor(fraction * 100 + 1e-9).toLocaleString('en-US');
   const tenth = value => { const shown = Math.round(value * 10) / 10; return shown === 0 ? 0 : shown; };
+  // Two hours or more without a new high while the river is up on about three hours earlier: the page then prints
+  // the two measured facts and neither "may have peaked" nor its count.
+  const upOnThreeHours = river => river.state === 'may-have-peaked' && !!river.threeHour && tenth(river.threeHour.change) > 0;
   // The measured River block. Everything printed here comes from D.riverState: every duration is counted between
   // gauge reading time stamps, and the device's check time is used only for the reading's age. No colour or class
   // changes with the state. `anchor` is D.countAnchor(...): where a look-back count is counted from and whether it
@@ -376,7 +379,10 @@
     $('river-change').innerHTML = '<span>' + esc((hour ? (hour.spanMinutes === 60 ? 'Last hour: ' : 'Last ' + num(hour.spanMinutes) + ' minutes: ') + delta(hour.change) + ' cfs (' + hour.label + ')' : 'Last hour: unavailable') + '.') + '</span> <span>' + esc((three ? 'About 3 hours: ' + delta(three.change) + ' cfs' : 'About 3 hours: unavailable') + '.') + '</span>';
     // The rise: exact when the 24 hours are whole; a lower bound when a hole may hide a lower reading; else unavailable.
     show('river-rise', river.rise && river.low24 && number ? 'Rise above the 24-hour low: ' + num(river.rise.cfs) + ' cfs (' + shareText(river.rise.share) + '% of the ' + number.cfs + ' cfs ' + number.label + ' number; low ' + num(river.low24.q) + ' cfs at ' + t(river.low24.t) + ').'
-      : river.riseAtLeast && river.lowHeld24 && number ? 'Rise above the lowest reading held from the last 24 hours: at least ' + num(river.riseAtLeast.cfs) + ' cfs (' + shareText(river.riseAtLeast.share) + '% of the ' + number.cfs + ' cfs ' + number.label + ' number). The gauge record has a ' + num(river.lowHeld24.gapMinutes) + '-minute gap in that time, so the rise may be larger.'
+      : river.riseAtLeast && river.lowHeld24 && number ? 'Rise above the lowest reading held from the last 24 hours: at least ' + num(river.riseAtLeast.cfs) + ' cfs'
+        // Holes adding up to more than hiddenRiseGapHours: the bound is printed without a share of the seasonal number.
+        + (river.lowHeld24.gapTotalMinutes > RULES.hiddenRiseGapHours * 60 ? '. The gauge record has gaps adding up to ' + num(tenth(river.lowHeld24.gapTotalMinutes / 60)) + ' hours in that time, so most of the rise may be hidden.'
+          : ' (' + shareText(river.riseAtLeast.share) + '% of the ' + number.cfs + ' cfs ' + number.label + ' number). The gauge record has a ' + num(river.lowHeld24.gapMinutes) + '-minute gap in that time, so the rise may be larger.')
         : 'Measured rise unavailable: the gauge record has a gap in the last 24 hours.');
     let olderText = '', stateText = '', pastText = '', highText = '', noteText = '', rainText = '';
     if (river.riseStatus === 'in-progress' && start && high) {
@@ -391,7 +397,12 @@
       } else {
         pastText = start.lowerBound ? 'Past the ' + start.threshold.cfs + ' cfs number since at or before the ' + t(start.t) + ' reading (a gap in the gauge record hides the exact time). This page’s arithmetic, not the Department of Health’s decision.'
           : 'Past the ' + start.threshold.cfs + ' cfs ' + start.threshold.label + ' number since the ' + t(start.t) + ' reading. This page’s arithmetic, not the Department of Health’s decision.';
-        if (river.state === 'new-high') { stateText = newHigh('of this rise so far') + ' The top of this rise is at this reading or later.'; noteText = SAY.afterNewHigh(); }
+        if (river.state === 'new-high') {
+          // After a fresh crossing a higher reading can still be held from an earlier rise: name it, so "highest of
+          // this rise" is not read as the highest of the last 48 hours.
+          stateText = newHigh('of this rise so far') + ' The top of this rise is at this reading or later.' + (river.higherBefore ? ' A higher reading, ' + num(river.higherBefore.q) + ' cfs at ' + t(river.higherBefore.t) + ', is held from before this rise began.' : '');
+          noteText = SAY.afterNewHigh();
+        }
         else if (river.state === 'rising-again') {
           // Below an earlier top and climbing: by the last hour, or by the climb back from the lowest reading since that top.
           stateText = river.risingAgainBasis === 'last-hour' ? 'Up ' + num(tenth(hour.change)) + ' cfs in the last hour; the newest reading is ' + num(tenth(river.belowHigh.cfs)) + ' cfs below this rise’s high of ' + top + '.'
@@ -401,12 +412,17 @@
           // reading is more than the count's 24 hours of readings past it.
           const lead = 'Now at least ' + percent(RULES.fallingFraction) + '% below the high of ' + top;
           stateText = !anchor ? lead + '.' : lead + '; the river first read that far below it at ' + t(anchor.t) + (anchor.withinHorizon ? '. ' + SAY.falling() : ', more than ' + D.LOOKBACK_RULES.countHorizonHours + ' hours of readings ago.');
+        } else if (upOnThreeHours(river)) {
+          // Two hours without a new high, yet higher than about three hours earlier: the two measured facts, with no
+          // "may have peaked", no count and no rain sentence. The sentence does not name the high, so it gets its own line.
+          stateText = 'No new high since ' + t(high.t) + ' (' + hoursMinutes(river.minutesSinceHigh) + ' of readings), but the river is up ' + num(tenth(three.change)) + ' cfs on about 3 hours earlier.';
+          highText = 'Highest reading since then: ' + top + '.';
         } else if (river.state === 'may-have-peaked') {
           // The count is taken from the 2-hour mark and is dropped once that mark is more than 24 hours of readings back.
           stateText = 'No new high since ' + t(high.t) + ' (' + hoursMinutes(river.minutesSinceHigh) + ' of readings): the river may have peaked at ' + num(high.q) + ' cfs.' + (anchor && anchor.withinHorizon ? ' ' + SAY.peak() : '');
           rainText = SAY.rainPause();
         } else if (river.state === 'paused') {
-          // The only state whose sentence does not name the high, so the high gets its own line here.
+          // A sentence that does not name the high, so the high gets its own line here.
           stateText = 'No new high since ' + t(high.t) + '. ' + SAY.pause();
           highText = 'Highest reading since then: ' + top + '.';
         } else if (river.state === 'just-off-high') stateText = 'Highest reading of this rise: ' + top + ', ' + plural(river.minutesSinceHigh, 'minute') + ' of readings before the newest one. Under an hour without a new high says nothing about the top of a rise.';
@@ -437,14 +453,21 @@
       if (noaa.aboveTop) above = 'The gauge is already ' + by(noaa.aboveTopBy) + ' cfs above the highest value in NOAA’s forecast.';
       else if (noaa.basis === 'above-highest-and-rising') above = risingAbove();
     } else {
-      // A real NOAA path starts some hours after its issue stamp: no value is invented for the reading's time.
+      // A real NOAA path starts some hours after its issue stamp: no value is invented for the reading's time, and
+      // only measured facts are printed. Nothing here says "not tracking".
+      const hour = river.lastHour;
       state = noaa.aboveLine ? 'above' : 'within';
       compare = 'NOAA’s river forecast, ' + issued + ', starts at ' + t(noaa.first.t) + ' with ' + num(noaa.first.q) + ' cfs; its highest value is ' + num(noaa.top.q) + ' cfs at ' + t(noaa.top.t) + '. The gauge read ' + num(noaa.gaugeCfs) + ' cfs at ' + t(noaa.readingTime) + '.';
-      above = noaa.basis === 'above-highest' ? 'The gauge is already ' + by(noaa.aboveTopBy) + ' cfs above the highest value in NOAA’s forecast.' : noaa.basis === 'above-highest-and-rising' ? risingAbove() : noaa.basis === 'above-first-and-rising' ? 'The gauge is ' + by(noaa.aboveFirstBy) + ' cfs above NOAA’s first value and rose in the last hour.' : '';
+      if (noaa.basis === 'above-first') {
+        above = 'The gauge is ' + by(noaa.aboveFirstBy) + ' cfs above NOAA’s first value' + (!hour ? '' : hour.label === 'rising' ? ' and rose ' + by(hour.change) + ' cfs in the last hour' : hour.label === 'about level' ? ' and was about level in the last hour' : '') + '.'
+          + (noaa.aboveTopAndRising ? ' It is also above the highest value in NOAA’s forecast (' + num(noaa.top.q) + ' cfs).' : '');
+      } else if (noaa.basis === 'above-highest-and-rising') above = risingAbove();
     }
-    const flag = state !== 'above' ? '' : noaa.code === 'not-tracking' ? 'NOAA’s forecast is not tracking this rise. Do not read a peak time from it.' : noaa.riseInProgress === null ? 'Whether a measured rise is in progress cannot be told from the gauge record. ' + NO_PEAK_ABOVE : '';
+    // "Not tracking" is said of the at-the-reading-time comparison only; the data layer never gives that code otherwise.
+    const flag = state !== 'above' ? '' : noaa.code === 'not-tracking' ? 'NOAA’s forecast is not tracking this rise. Do not read a peak time from it.' : noaa.covered && noaa.code === 'unknown' ? 'Whether a measured rise is in progress cannot be told from the gauge record. ' + NO_PEAK_ABOVE : '';
     put('noaa-compare', compare); show('noaa-above', above); show('noaa-flag', flag);
-    return { said: flag, compare: state };
+    // A screen reader is told the flag; where being above the line carries no flag, the measured sentence instead.
+    return { said: flag || (state === 'above' ? above : ''), compare: state };
   }
   const feet = value => { const text = value.toFixed(1); return text === '-0.0' ? '0.0' : text; };
   // The Tide block: the last high or low (kept after it passes), the direction, and the next two.
@@ -566,13 +589,16 @@
     $('rise-progress').style.width = Math.min(100, Math.max(0, screen.percent)) + '%';
     $('rise-progress').style.background = exceeded ? 'var(--coral)' : 'var(--teal)';
   }
-  function renderCrest(fc, tides, peakWithheld) {
+  function renderCrest(fc, tides, peakWithheld, onlyFalls, now) {
     $('crest-nearby').innerHTML = '';
-    // No "forecast to fall" sentence and no forecast-high time unless a comparison was made and the gauge is not above the line.
+    // No falling-forecast sentence and no forecast-high time unless a comparison was made and the gauge is not above the line.
     if (fc?.usable && peakWithheld) { put('crest-time', peakWithheld); put('crest-detail', 'No forecast-high time or tide pairing is shown.'); return; }
     if (!fc?.usable || fc.atStart || fc.atEnd) {
+      // The first value is named with its time: a NOAA path can start hours after this check, so "the start of the
+      // window" is not now. A path that dips and partly recovers is not said to fall.
+      const first = fc?.usable ? ' (' + num(fc.rows[0].q) + ' cfs at ' + clock(fc.rows[0].t, now) + ')' : '';
       put('crest-time', !fc?.usable ? 'Forecast timing unavailable' : fc.atEnd ? 'Highest value is at the forecast’s end' : 'Highest value is at the forecast’s start');
-      put('crest-detail', !fc?.usable ? fc.reason : fc.atEnd ? 'The high may occur later than the available path. No tide pairing is inferred.' : 'The river is forecast to fall from the start of the window. No future high time is inferred.'); return;
+      put('crest-detail', !fc?.usable ? fc.reason : fc.atEnd ? 'The high may occur later than the available path. No tide pairing is inferred.' : (onlyFalls ? 'NOAA’s forecast falls from its first value' + first + '.' : 'No later value in NOAA’s forecast is higher than its first' + first + '.') + ' No future high time is inferred.'); return;
     }
     const highTime = fc.firstMax, before = [...tides].filter(r => r.t <= highTime).at(-1), after = tides.find(r => r.t >= highTime);
     put('crest-time', 'NOAA forecast high around ' + date(highTime));
@@ -791,13 +817,13 @@
       'When the newest gauge reading is stamped more than ' + RULES.clockBehindMinutes + ' minutes after this device’s time, the device clock is behind the gauge: the page says so and prints no age, no change figure and no state until the clock is corrected.',
       'Every duration in the River block is counted between gauge reading time stamps, never against this device’s clock. The device’s check time is used only for the age of the newest reading.',
       'The last-hour change is the newest reading minus the reading nearest one hour earlier, within ' + RULES.lastHourToleranceMinutes + ' minutes either way. It is called “rising” only at +' + RULES.risingCfs + ' cubic feet per second (cfs) and +' + rise + '% or more, “falling” only at −' + RULES.risingCfs + ' cfs and −' + rise + '% or beyond, and “about level” otherwise.',
-      'The measured rise is the newest reading minus the lowest reading of the 24 hours before it. With readings reaching back 24 hours and no hole over ' + RULES.maxGapMinutes + ' minutes it is exact. With such a hole it is printed as “at least”, a lower bound above the lowest reading held, because a lower reading may have been missed. When the readings do not reach back 24 hours it is shown as unavailable, never as zero or as “no rise”. Its share of the seasonal number is rounded down, here and on the rise card.',
+      'The measured rise is the newest reading minus the lowest reading of the 24 hours before it. With readings reaching back 24 hours and no hole over ' + RULES.maxGapMinutes + ' minutes it is exact. With such a hole it is printed as “at least”, a lower bound above the lowest reading held, because a lower reading may have been missed. When the holes inside those 24 hours add up to more than ' + RULES.hiddenRiseGapHours + ' hours, the bound is printed without its share of the seasonal number, because most of the rise may be hidden. When the readings do not reach back 24 hours it is shown as unavailable, never as zero or as “no rise”. Its share of the seasonal number is rounded down, here and on the rise card.',
       '“This rise” starts at the first reading of the last ' + RULES.riseMemoryHours + ' hours at which that measured rise crossed up to the seasonal number in force at that reading, and it is remembered for ' + RULES.riseMemoryHours + ' hours of readings. A reading whose lower bound reaches the number counts as past it, and the page then says “since at or before”, because a gap hides the exact time. When no reading in those ' + RULES.riseMemoryHours + ' hours crosses up to the number and the earliest one compared is already past it, the page says its readings do not reach back to where that rise began, prints the highest reading it holds, and gives no pause, peak or falling line and no count.',
-      'A new high is any reading strictly higher than every earlier reading of this rise. An equal reading is not a new high. “Still rising” is said only for a new high whose last-hour change is “rising”; otherwise the page says “New high”.',
-      'State lines: ' + RULES.pauseMinutes + ' minutes of readings with no new high is called a pause; ' + RULES.peakMinutes + ' minutes or more is “may have peaked”; a newest reading at least ' + drop + '% below the high is “falling”. None of these says the top of the rise has passed. A reading below the high is instead called climbing again when its last-hour change is “rising”, or when it stands above the lowest reading since the high by at least ' + climb + '% of the high and the about-three-hour change is positive. A hole over ' + RULES.maxGapMinutes + ' minutes between the high and the newest reading gives no state.',
+      'A new high is any reading strictly higher than every earlier reading of this rise. An equal reading is not a new high. “Still rising” is said only for a new high whose last-hour change is “rising”; otherwise the page says “New high”. When a higher reading from the last ' + RULES.riseMemoryHours + ' hours is held from before this rise began, the new-high line names it.',
+      'State lines: ' + RULES.pauseMinutes + ' minutes of readings with no new high is called a pause; ' + RULES.peakMinutes + ' minutes or more is “may have peaked”; a newest reading at least ' + drop + '% below the high is “falling”. None of these says the top of the rise has passed. After ' + RULES.peakMinutes + ' minutes with no new high, while the newest reading is higher than the one about three hours earlier, the page prints those two facts instead of “may have peaked”, with no count. A reading below the high is instead called climbing again when its last-hour change is “rising”, or when it stands above the lowest reading since the high by at least ' + climb + '% of the high, the about-three-hour change is positive and the last-hour change is not negative. A hole over ' + RULES.maxGapMinutes + ' minutes between the high and the newest reading gives no state.',
       'The count beside “falling” is taken from the first reading at least ' + drop + '% below the high, and the count beside “may have peaked” from the ' + (RULES.peakMinutes / 60) + '-hour mark. Neither count is printed once the newest reading is more than ' + D.LOOKBACK_RULES.countHorizonHours + ' hours of readings past that point.',
-      '“Not tracking” sets NOAA’s current forecast issue against the gauge. When NOAA’s path covers the time of the newest gauge reading, its value for that time (read along a straight line between forecast points no more than 6 hours apart) is set against the reading. A NOAA path starts some hours after it is issued; until then the reading is set against the highest value anywhere in the path, or against the path’s first value when the last-hour change is “rising”. The gauge is above the line at ' + line + '% of the seasonal number or more, and also whenever it is above the highest value in NOAA’s forecast by any amount while the last-hour change is “rising”; with a measured rise in progress the page then says the forecast is not tracking it. This uses no saved history, so it works on a first visit.',
-      'NOAA’s peak-time words (a forecast high time, or “forecast to fall”) are printed only when that comparison was made and the gauge is not above the line. When the River block cannot tell, the comparison is not made and the NOAA-based rise card (“What NOAA’s forecast adds”) is withheld for the same reason.',
+      '“Not tracking” sets NOAA’s current forecast issue against the gauge. When NOAA’s path covers the time of the newest gauge reading, its value for that time (read along a straight line between forecast points no more than 6 hours apart) is set against the reading: the gauge is above the line at ' + line + '% of the seasonal number or more, and with a measured rise in progress the page then says the forecast is not tracking it. A NOAA path starts some hours after it is issued. Until its first point is reached no value is invented for the reading’s time: the gauge is above the line when it stands above the path’s first value by that ' + line + '% or more while the last-hour change is not “falling”, and the page prints the measured figures only and does not say “not tracking”. In both cases the gauge is also above the line whenever it is above the highest value in NOAA’s forecast by any amount while the last-hour change is “rising”. This uses no saved history, so it works on a first visit.',
+      'NOAA’s peak-time words (a forecast high time, or that its forecast falls from its first value) are printed only when that comparison was made and the gauge is not above the line. When the River block cannot tell, the comparison is not made and the NOAA-based rise card (“What NOAA’s forecast adds”) is withheld for the same reason.',
       'The counts printed beside a state are look-backs on ' + E.rises.count + ' Samish rises of ' + E.rises.period + ' (' + E.rises.readings + '), listed under Research & limits. ' + E.caveat,
       'The tide block keeps the last high or low after it passes and shows the next two. They are Bellingham predictions, not Samish Bay water levels or boat clearance.',
       'A six-hour rain block with no value is drawn as a hatched “no data” column, and a block forecast at exactly zero is labelled 0. An observed-rain gauge reading 0.00 inch for 24 hours while both other listed gauges report ' + D.RAIN_RULES.suspectZeroOtherGaugesIn + ' inch or more is marked suspect. The dry-season rain context is shown from May to October only, and the two rain sentences appear beside “may have peaked” only.'

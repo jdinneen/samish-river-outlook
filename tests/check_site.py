@@ -182,6 +182,18 @@ def synthetic_gauge_payload(check, readings):
                      for moment, flow_cfs in readings]}
     return feeds
 
+def knot_series(knots):
+    """SYNTHETIC readings [(time, cfs), ...]: straight lines between (time, cfs) knots, one reading every 15 minutes,
+    rounded the way the gauge reports (tenths under 100 cfs, whole numbers above). Nothing here is real."""
+    rows = []
+    for (t0, q0), (t1, q1) in zip(knots, knots[1:]):
+        moment = t0
+        while moment < t1:
+            value = q0 + (q1 - q0) * ((moment - t0) / (t1 - t0))
+            rows.append((moment, round(value, 1) if value < 100 else int(value + 0.5)))
+            moment += timedelta(minutes=15)
+    return rows + [knots[-1]]
+
 def fixtures(now=None):
     """Synthetic feeds around `now` (default: the moment the suite started)."""
     ISO = lambda h=0: ((now or NOW) + timedelta(hours=h)).isoformat()
@@ -554,8 +566,8 @@ with sync_playwright() as p:
       const hold=(x,q=199)=>{const out=[];for(let m=Math.ceil(x/15)*15-15;m>=0;m-=15)out.push([m,q]);return out};
 
       // Rule constants.
-      check(R.freshMinutes===90&&R.pauseMinutes===60&&R.peakMinutes===120&&R.fallingFraction===0.05&&R.risingCfs===2&&R.risingFraction===0.02&&R.riseMemoryHours===48&&R.lastHourToleranceMinutes===20&&R.maxGapMinutes===60&&R.climbBackFraction===0.05&&R.clockBehindMinutes===5,'river rule constants');
-      check(Object.isFrozen(R)&&Object.keys(R).length===11,'river rule constants are one frozen object');
+      check(R.freshMinutes===90&&R.pauseMinutes===60&&R.peakMinutes===120&&R.fallingFraction===0.05&&R.risingCfs===2&&R.risingFraction===0.02&&R.riseMemoryHours===48&&R.lastHourToleranceMinutes===20&&R.maxGapMinutes===60&&R.climbBackFraction===0.05&&R.clockBehindMinutes===5&&R.hiddenRiseGapHours===6,'river rule constants');
+      check(Object.isFrozen(R)&&Object.keys(R).length===12,'river rule constants are one frozen object');
       check(Object.isFrozen(D.RAIN_RULES)&&D.RAIN_RULES.suspectZeroOtherGaugesIn===0.25&&D.RAIN_RULES.dryMonths.join()==='5,6,7,8,9,10','rain rule constants');
 
       // River state. Freshness: exactly 90 and 91 minutes; a feed 110 minutes behind; holes.
@@ -610,6 +622,12 @@ with sync_playwright() as p:
       check(s.lowHeld24.q===50&&s.lowHeld24.gapMinutes===75&&s.riseAtLeast.cfs===0&&s.riseStatus==='unknown'&&s.riseStart===null,'with a hole the lowest reading held gives only a lower bound, and a bound under the number is never "no rise"');
       s=D.riverState(grid(T,23.75,m=>50),T);check(s.low24===null&&s.lowHeld24===null&&s.riseAtLeast===null&&s.riseStatus==='unknown','readings that stop short of 24 hours give no lower bound either');
       s=D.riverState(grid(T,30,m=>m===0?60:50),T);check(s.low24.q===50&&s.rise.cfs===10&&s.lowHeld24===null&&s.riseAtLeast===null,'a whole 24 hours gives the exact rise and no lower bound');
+      // The holes inside the 24 hours are added up; of a hole that crosses the start of the 24 hours only the part inside counts.
+      const gapped=(...holes)=>grid(T,30,m=>50).filter(r=>!holes.some(([from,to])=>r.t>T-from*M&&r.t<T-to*M));
+      s=D.riverState(gapped([600,525]),T);check(s.lowHeld24.gapMinutes===75&&s.lowHeld24.gapTotalMinutes===75,'one hole: the total is that hole');
+      s=D.riverState(gapped([600,525],[1200,900]),T);check(s.lowHeld24.gapMinutes===300&&s.lowHeld24.gapTotalMinutes===375,'two holes of 75 and 300 minutes add up to 375, over the 6-hour limit');
+      s=D.riverState(gapped([600,525],[1185,900]),T);check(s.lowHeld24.gapTotalMinutes===360,'two holes adding up to exactly 6 hours');
+      s=D.riverState(gapped([1500,1380]),T);check(s.low24===null&&s.lowHeld24.gapMinutes===120&&s.lowHeld24.gapTotalMinutes===60,'a 120-minute hole across the start of the 24 hours counts for the 60 minutes inside them');
       // A 75-minute hole four hours back, then a climb: the first reading whose LOWER BOUND reaches the number starts the rise.
       const afterHole=top=>grid(T,60,m=>m>120?50:m>90?Math.min(top,120):m>60?Math.min(top,160):m>30?Math.min(top,175):top).filter(r=>r.t<=T-300*M||r.t>=T-225*M);
       s=D.riverState(afterHole(180),T);
@@ -766,6 +784,23 @@ with sync_playwright() as p:
       s=D.riverState(dip(165,166),T);check(s.state==='rising-again'&&s.risingAgainBasis==='climb-back'&&s.threeHour.change===1&&s.lastHour.label==='about level','with a positive three-hour change it is climbing again');
       s=D.riverState(dip(159,159.9),T);check(s.state==='falling'&&s.threeHour.change>0&&s.reading.q-s.lowSinceHigh.q<10,'less than 5% of the high above the low is not climbing');
       s=D.riverState(dip(159,160),T);check(s.state==='rising-again'&&s.reading.q-s.lowSinceHigh.q===10,'exactly 5% of the high above the low is climbing again');
+      // The climb back is not said while the last hour is down. After the 200 cfs high: a low of 150, a second bump
+      // to 172, then `tail` for the last hour; null drops a reading. 22 cfs above the low and up on three hours throughout.
+      const bump=tail=>scene(T,[[645,90],[630,150],[615,180],[600,200],...Array.from({length:40},(_,i)=>{const m=585-i*15;return [m,m===585?180:m===570?165:m>=300?150:m>=180?160:m>=60?172:tail[m]]}).filter(p=>p[1]!==null)]);
+      s=D.riverState(bump({45:171,30:170,15:169,0:168}),T);
+      check(s.state==='falling'&&s.risingAgainBasis===null&&s.lastHour.change===-4&&s.lastHour.label==='falling'&&s.threeHour.change===8&&s.reading.q-s.lowSinceHigh.q===18,'18 cfs above the low and up on three hours, but falling in the last hour: not climbing again');
+      s=D.riverState(bump({45:172,30:172,15:171,0:171}),T);
+      check(s.state==='falling'&&s.risingAgainBasis===null&&s.lastHour.change===-1&&s.lastHour.label==='about level'&&s.threeHour.change===11,'a last hour down 1 cfs is "about level" but negative: not climbing again');
+      s=D.riverState(bump({45:172,30:172,15:172,0:172}),T);
+      check(s.state==='rising-again'&&s.risingAgainBasis==='climb-back'&&s.lastHour.change===0&&s.threeHour.change===12,'a last hour of exactly zero is not negative: climbing again');
+      s=D.riverState(scene(T,[[645,90],[630,150],[615,180],[600,200],...Array.from({length:40},(_,i)=>{const m=585-i*15;return [m,m===585?180:m===570?165:m>=300?150:m>=180?160:172]}).filter(p=>![45,60,75].includes(p[0]))]),T);
+      check(s.fresh&&s.lastHour===null&&s.threeHour.change===12&&s.state==='falling'&&s.risingAgainBasis===null,'no last-hour change to read: not climbing again');
+      // After a fresh crossing, a higher reading held from before this rise began is reported, and only then.
+      const twoRises=piecewise([[T-80*H,50],[T-56*H,50],[T-52*H,320],[T-48*H,300],[T-22*H,100],[T-20*H,100],[T-16*H,150],[T-2*H,210],[T,210]]);
+      s=D.riverState(upTo(twoRises,T-2*H),T-2*H);
+      check(s.state==='new-high'&&s.reading.q===210&&s.riseStart.atOrBefore===false&&s.riseStart.lowerBound===false&&s.riseStart.q===200&&s.riseStart.t===T-4.25*H&&s.high.q===210&&s.higherBefore.q===310&&s.higherBefore.t===T-50*H,'a new high of this rise below a reading held from before it began: the highest such reading of the last 48 hours is reported');
+      s=D.riverState(upTo(twoRises,T-2*H).map(r=>r.t<T-22*H?{...r,q:Math.min(r.q,205)}:r),T-2*H);check(s.state==='new-high'&&s.higherBefore===null,'no higher reading is held from before this rise: nothing is reported');
+      check(D.riverState(climb(0),T).higherBefore===null&&D.riverState(quiet,T).higherBefore===null,'an ordinary new high, or no rise, reports no earlier higher reading');
       check(D.riverState(climb(0),T).lowSinceHigh===null&&D.riverState(climb(0),T).risingAgainBasis===null,'a new high has no low since the high');
 
       // NOAA's current issue against the gauge. This NOAA path is INVENTED: six-hourly values that never show
@@ -795,7 +830,7 @@ with sync_playwright() as p:
       n=D.noaaAgainstGauge(D.riverState(climb(0),T),flat(199.9),iso(T-H),T);check(n.basis==='above-highest-and-rising'&&n.aboveLine===true&&near(n.aboveTopBy,0.1),'covered: above the highest value by 0.1 cfs and rising is above the line');
       n=D.noaaAgainstGauge(level,flat(198.9),iso(T-H),T);check(n.basis===null&&n.aboveLine===false&&n.code==='within-line'&&near(n.aboveTopBy,0.1),'covered: above the highest value by 0.1 cfs without a rising last hour is within the line');
       n=D.noaaAgainstGauge(D.riverState(climb(0),T),flat(200),iso(T-H),T);check(n.basis===null&&n.aboveLine===false&&n.aboveTopBy===0&&n.code==='within-line','covered: equal to the highest value is not above it, rising or not');
-      n=D.noaaAgainstGauge(D.riverState(climb(0),T),flat(199.9,1),iso(T-H),T);check(n.covered===false&&n.basis==='above-highest-and-rising'&&n.code==='not-tracking'&&near(n.aboveTopBy,0.1),'reading before the path: above the highest value by 0.1 cfs and rising is above the line');
+      n=D.noaaAgainstGauge(D.riverState(climb(0),T),flat(199.9,1),iso(T-H),T);check(n.covered===false&&n.basis==='above-highest-and-rising'&&n.aboveTopAndRising===true&&n.code==='above-line'&&!n.notTracking&&n.riseInProgress===true&&near(n.aboveTopBy,0.1),'reading before the path: above the highest value by 0.1 cfs and rising is above the line, and is never "not tracking"');
       n=D.noaaAgainstGauge(level,flat(198.9,1),iso(T-H),T);check(n.covered===false&&n.basis===null&&n.code==='within-line','reading before the path: above the highest value by 0.1 cfs without a rising last hour is within the line');
       n=D.noaaAgainstGauge(D.riverState(climb(0),T),flat(200,1),iso(T-H),T);check(n.covered===false&&n.basis===null&&n.aboveTopBy===0&&n.code==='within-line','reading before the path: equal to the highest value is not above it');
       const risingQuiet=D.riverState(scene(T,[[60,50],[45,51],[30,52],[15,53],[0,54]]),T);
@@ -803,19 +838,32 @@ with sync_playwright() as p:
       n=D.noaaAgainstGauge(D.riverState(quiet,T),flat(30),iso(T-H),T);check(n.code==='above-line'&&!n.notTracking&&n.difference===20&&n.riseInProgress===false,'above NOAA with no rise in progress is not "not tracking"');
       n=D.noaaAgainstGauge(D.riverState(climb(0),T+110*M),flat(100),iso(T-H),T+110*M);
       check(n.code==='unknown'&&!n.notTracking&&n.aboveLine===true&&n.riseInProgress===null&&typeof n.reason==='string'&&n.difference===100&&n.compared===true,'gauge feed late: the arithmetic is returned but the code is unknown (the page makes no comparison with a refused reading)');
-      // The path below starts one hour AFTER the reading: no value is invented for the reading's time, and the gauge is
-      // set against the highest value in the path, or against its first value while the last hour is "rising".
+      // The path below starts one hour AFTER the reading: no value is invented for the reading's time. The gauge is set
+      // against the path's FIRST value, and is above the line when it is higher by the line while the last hour is not
+      // "falling". "Not tracking" is never the code here, whatever the rise.
       n=D.noaaAgainstGauge(D.riverState(climb(0),T),flat(100,1),iso(T-H),T);
       check(n.compared===true&&n.covered===false&&n.forecastCfs===null&&n.difference===null&&n.gaugeCfs===200&&n.pathOnlyFalls===false&&n.reason===null,'no value is invented before the first point of the NOAA path');
-      check(n.code==='not-tracking'&&n.aboveLine===true&&n.basis==='above-highest'&&n.first.q===100&&n.first.t===T+H&&n.top.q===100&&n.top.t===T+H&&n.aboveTopBy===100&&n.aboveTop===true&&n.aboveFirstBy===100,'reading before the path: the gauge is above the highest value in the path');
-      check(D.noaaAgainstGauge(D.riverState(climb(0),T),flat(190,1),iso(T-H),T).basis==='above-highest'&&D.noaaAgainstGauge(D.riverState(climb(120,hold(120)),T),flat(189.5,1),iso(T-H),T).code==='within-line'&&D.noaaAgainstGauge(D.riverState(climb(120,hold(120)),T),flat(189,1),iso(T-H),T).basis==='above-highest','reading before the path: exactly the 10% line above the highest value counts on its own; just under does not when the last hour is not rising');
+      check(n.code==='above-line'&&!n.notTracking&&n.riseInProgress===true&&n.aboveLine===true&&n.basis==='above-first'&&n.aboveTopAndRising===true&&n.first.q===100&&n.first.t===T+H&&n.top.q===100&&n.top.t===T+H&&n.aboveTopBy===100&&n.aboveTop===true&&n.aboveFirstBy===100,'reading before the path: above the first value, rising, and above the highest value too; a rise in progress, yet not "not tracking"');
+      check(D.noaaAgainstGauge(D.riverState(climb(0),T),flat(190,1),iso(T-H),T).basis==='above-first'&&D.noaaAgainstGauge(level,flat(189.5,1),iso(T-H),T).code==='within-line'&&D.noaaAgainstGauge(level,flat(189,1),iso(T-H),T).basis==='above-first','reading before the path: exactly the 10% line above the first value counts; just under does not when the last hour is not rising');
+      // One larger value days ahead does not hide a mismatch with the first value, rising or about level.
       const laterHigher=flat(100,1).map((r,i)=>({...r,q:i===1||i===3?400:100}));
       n=D.noaaAgainstGauge(D.riverState(climb(0),T),laterHigher,iso(T-H),T);
-      check(n.code==='not-tracking'&&n.basis==='above-first-and-rising'&&n.top.q===400&&n.top.t===T+7*H&&n.aboveTop===false&&n.aboveTopBy===-200&&n.aboveFirstBy===100,'reading before the path: above the first value while the last hour is rising; the highest value is the earliest on a tie');
-      n=D.noaaAgainstGauge(D.riverState(climb(120,hold(120)),T),laterHigher,iso(T-H),T);
-      check(n.compared===true&&n.code==='within-line'&&n.aboveLine===false&&n.basis===null&&n.aboveFirstBy===99&&n.riseInProgress===true,'reading before the path: above the first value but not rising in the last hour is not above the line');
-      n=D.noaaAgainstGauge(D.riverState(quiet,T),flat(30,1),iso(T-H),T);check(n.code==='above-line'&&n.basis==='above-highest'&&n.riseInProgress===false,'reading before the path, above the highest value, no rise in progress');
-      n=D.noaaAgainstGauge(D.riverState(quiet,T),flat(45,1),iso(T-H),T);check(n.code==='within-line'&&n.compared===true&&n.aboveTopBy===5,'reading before the path and within the line of it');
+      check(n.code==='above-line'&&!n.notTracking&&n.basis==='above-first'&&n.aboveTopAndRising===false&&n.top.q===400&&n.top.t===T+7*H&&n.aboveTop===false&&n.aboveTopBy===-200&&n.aboveFirstBy===100,'reading before the path: above the first value while rising, under a larger value later in the path; the highest value is the earliest on a tie');
+      n=D.noaaAgainstGauge(level,laterHigher,iso(T-H),T);
+      check(n.compared===true&&n.code==='above-line'&&n.aboveLine===true&&n.basis==='above-first'&&n.aboveTopAndRising===false&&n.aboveFirstBy===99&&n.aboveTopBy===-201&&n.riseInProgress===true,'reading before the path: about level and 99 cfs above the first value is above the line; a larger value days ahead does not hide it');
+      // Falling toward NOAA's first value is not being above it.
+      const dropping=D.riverState(climb(120,[[105,199],[90,198],[75,196],[60,195],[45,193],[30,191],[15,190],[0,188]]),T);
+      n=D.noaaAgainstGauge(dropping,flat(100,1),iso(T-H),T);
+      check(dropping.lastHour.change===-7&&dropping.lastHour.label==='falling'&&dropping.riseStatus==='in-progress'&&n.compared===true&&n.covered===false&&n.aboveFirstBy===88&&n.aboveTopBy===88&&n.aboveTop===true&&n.basis===null&&n.aboveLine===false&&n.code==='within-line'&&!n.notTracking,'reading before the path: 88 cfs above the first and highest value while falling in the last hour is not above the line');
+      check(D.noaaAgainstGauge(dropping,flat(100),iso(T-H),T).code==='not-tracking','the same falling river against a path that covers the reading is still set against NOAA’s value for that time');
+      // With no last-hour change to read, a gauge above the first value by the line is above it (absent is not "falling").
+      const noHour=D.riverState(scene(T,[[85,60],[35,64],[0,66]]),T);
+      n=D.noaaAgainstGauge(noHour,flat(50,1),iso(T-H),T);check(noHour.fresh&&noHour.lastHour===null&&n.basis==='above-first'&&n.aboveFirstBy===16&&n.aboveTopAndRising===false&&n.code==='above-line','reading before the path: no last-hour change, 16 cfs above the first value: above the line');
+      n=D.noaaAgainstGauge(D.riverState(quiet,T),flat(30,1),iso(T-H),T);check(n.code==='above-line'&&n.basis==='above-first'&&n.aboveTopAndRising===false&&n.riseInProgress===false,'reading before the path, about level and above the first value, no rise in progress');
+      n=D.noaaAgainstGauge(D.riverState(quiet,T),flat(45,1),iso(T-H),T);check(n.code==='within-line'&&n.compared===true&&n.aboveTopBy===5&&n.aboveTopAndRising===false,'reading before the path and within the line of it');
+      n=D.noaaAgainstGauge(D.riverState(climb(0),T+110*M),flat(100,3),iso(T-H),T+110*M);
+      check(n.covered===false&&n.aboveLine===true&&n.basis==='above-first'&&n.code==='unknown'&&!n.notTracking&&typeof n.reason==='string','reading before the path on a gauge feed that is late: the code is unknown (the page makes no comparison with a refused reading)');
+      check(D.noaaAgainstGauge(null,flat(100),iso(T-H),T).aboveTopAndRising===null,'nothing compared: no above-the-highest flag');
       n=D.noaaAgainstGauge(D.riverState(climb(0),T),[{t:T-8*H,q:100},...flat(100,1)],iso(T-H),T);check(n.forecastCfs===null&&n.code==='unknown'&&n.compared===false&&n.aboveLine===null,'no value across forecast points more than 6 hours apart');
       n=D.noaaAgainstGauge(D.riverState(climb(0),T),flat(100),iso(T-49*H),T);check(n.code==='unknown'&&n.pathOnlyFalls===null&&n.forecastCfs===null&&n.issued===T-49*H&&typeof n.reason==='string','an issue over 48 hours old is not compared');
       n=D.noaaAgainstGauge(null,flat(100),iso(T-H),T);check(n.code==='unknown'&&n.gaugeCfs===null&&n.pathOnlyFalls===false,'no gauge reading: nothing to compare');
@@ -1019,12 +1067,24 @@ with sync_playwright() as p:
     past_gap = lambda since: f'Past the 100 cfs number since at or before the {since} reading (a gap in the gauge record hides the exact time).' + ARITHMETIC
     rise_line = lambda cfs, share, low: f'Rise above the 24-hour low: {cfs} cfs ({share}% of the 100 cfs May–October number; low {low}).'
     rise_at_least = lambda cfs, share, gap: f'Rise above the lowest reading held from the last 24 hours: at least {cfs} cfs ({share}% of the 100 cfs May–October number). The gauge record has a {gap}-minute gap in that time, so the rise may be larger.'
+    # ... and with holes adding up to more than 6 hours, the bound alone: no share of the seasonal number.
+    rise_mostly_hidden = lambda cfs, hours: f'Rise above the lowest reading held from the last 24 hours: at least {cfs} cfs. The gauge record has gaps adding up to {hours} hours in that time, so most of the rise may be hidden.'
     # NOAA's value for the time of the reading (the reading lies inside NOAA's path) ...
     noaa_line = lambda issued, age, value, at, gauge, gap: f'NOAA’s river forecast, issued {issued} ({age} ago), has {value} cfs for {at}. The gauge read {gauge} cfs then: {gap} cfs higher.'
     # ... or, for the hours after an issue when NOAA's path has not started yet, its first and highest values.
     noaa_ahead = lambda issued, age, starts, first, top, top_at, gauge, at: f'NOAA’s river forecast, issued {issued} ({age} ago), starts at {starts} with {first} cfs; its highest value is {top} cfs at {top_at}. The gauge read {gauge} cfs at {at}.'
     above_highest = lambda by: f'The gauge is already {by} cfs above the highest value in NOAA’s forecast.'
-    not_compared = lambda issued, age, why: f'NOAA’s river forecast, issued {issued} ({age} ago), is not compared with the gauge: {why}.'
+    # Before NOAA's path reaches the reading the block prints measured figures only: how far the gauge is above NOAA's
+    # first value and what the last hour did. It never says "not tracking" there.
+    above_first = lambda by, last_hour='': f'The gauge is {by} cfs above NOAA’s first value{last_hour}.'
+    rose = lambda cfs: f' and rose {cfs} cfs in the last hour'
+    LEVEL_HOUR = ' and was about level in the last hour'
+    also_above = lambda top: f' It is also above the highest value in NOAA’s forecast ({top} cfs).'
+    # NOAA's own words about a falling path name the first value and its time; they are printed only when a comparison
+    # was made and the gauge is not above the line.
+    only_falls = lambda value, at: f'NOAA’s forecast path only falls from its first value ({value} cfs at {at}). That value is not a forecast high.'
+    falls_from_first = lambda value, at: f'NOAA’s forecast falls from its first value ({value} cfs at {at}). No future high time is inferred.'
+    not_compared =lambda issued, age, why: f'NOAA’s river forecast, issued {issued} ({age} ago), is not compared with the gauge: {why}.'
 
     # No count that lives in the evidence object may be typed into the page's own files: the sentences are
     # assembled from the object, so these strings can appear only in data.js.
@@ -1131,7 +1191,7 @@ with sync_playwright() as p:
              change='Last hour: +21.5 cfs (rising). About 3 hours: +56.5 cfs.',
              state='Still rising as of 12:00 PM PDT (reading 20 minutes old): 119 cfs is the highest of this rise so far, up 21.5 cfs in the hour before. The top of this rise is at this reading or later.',
              since='12:00 PM PDT', rise=rise_line('103.1', 103, low_at_1am),
-             noaa=noaa_line('8:19 AM PDT', '4 hours', '57', '12:00 PM PDT', '119', '62'), above='62', card='Largest relative rise: 103.1 cfs, or 103% of the 100 cfs May–October reference.',
+             noaa=noaa_line('8:19 AM PDT', '4 hours', '57', '12:00 PM PDT', '119', '62'), above=above_highest('62'), card='Largest relative rise: 103.1 cfs, or 103% of the 100 cfs May–October reference.',
              tide='High of 7.8 ft was at 8:08 AM PDT, 4 h 12 min before this check. The tide is falling to a low of 4.6 ft at 1:21 PM PDT, then a high of 8.2 ft at 6:46 PM PDT.'),
         # 3:20 PM: NOAA reissued at 2:36 PM and its path does not begin until 5:00 PM. Version 7 as first built printed
         # "no value for this hour" here. 163 cfs was first read at 2:45 PM; the 3:00 PM reading only equals it (a tie is not a new high).
@@ -1139,59 +1199,72 @@ with sync_playwright() as p:
              change='Last hour: +6 cfs (rising). About 3 hours: +44 cfs.',
              state='Highest reading of this rise: 163 cfs at 2:45 PM PDT, 15 minutes of readings before the newest one.' + UNDER_AN_HOUR,
              since='12:00 PM PDT', rise=rise_line('147.1', 147, low_at_1am),
-             noaa=afternoon_issue('44 minutes', '163', '3:00 PM PDT'), above='71.2', card=None, tide=afternoon_tide('1 h 59 min')),
+             noaa=afternoon_issue('44 minutes', '163', '3:00 PM PDT'), above=above_first('71.2', rose('6')) + also_above('91.8'), flag=None, card=None, tide=afternoon_tide('1 h 59 min')),
         dict(name='0420pm', check=pacific(29, 16, 20), state_code='just-off-high', flow='164', time='at 4:00 PM PDT',
              change='Last hour: +1 cfs (about level). About 3 hours: +27 cfs.',
              state='Highest reading of this rise: 164 cfs at 3:15 PM PDT, 45 minutes of readings before the newest one.' + UNDER_AN_HOUR,
              since='12:00 PM PDT', rise=rise_line('148.1', 148, low_at_1am),
-             noaa=afternoon_issue('2 hours', '164', '4:00 PM PDT'), above='72.2', card=None, tide=afternoon_tide('2 h 59 min')),
+             noaa=afternoon_issue('2 hours', '164', '4:00 PM PDT'), above=above_first('72.2', LEVEL_HOUR), flag=None, card=None, tide=afternoon_tide('2 h 59 min')),
         # Opened at 4:35 PM holding the 4:15 PM reading, exactly 60 minutes of readings after the 3:15 PM high: a pause.
         # The river then went on from 164 to 191 cfs.
         dict(name='0435pm', check=pacific(29, 16, 35), newest=pacific(29, 16, 15), state_code='paused', flow='164', time='at 4:15 PM PDT',
              change='Last hour: 0 cfs (about level). About 3 hours: +22 cfs.',
              state='No new high since 3:15 PM PDT. ' + PAUSE, high='Highest reading since then: 164 cfs at 3:15 PM PDT.',
              since='12:00 PM PDT', rise=rise_line('148.1', 148, low_at_1am),
-             noaa=afternoon_issue('2 hours', '164', '4:15 PM PDT'), above='72.2', card=None, tide=afternoon_tide('3 h 14 min')),
+             noaa=afternoon_issue('2 hours', '164', '4:15 PM PDT'), above=above_first('72.2', LEVEL_HOUR), flag=None, card=None, tide=afternoon_tide('3 h 14 min')),
         # Opened at 4:50 PM holding the 4:30 PM reading: a new high (166 cfs) only 2 cfs and 1.2% above the reading an
         # hour before. The last-hour label is "about level", so the sentence says "New high", never "Still rising".
         dict(name='0450pm', check=pacific(29, 16, 50), newest=pacific(29, 16, 30), state_code='new-high', still_rising=False, flow='166', time='at 4:30 PM PDT',
              change='Last hour: +2 cfs (about level). About 3 hours: +19 cfs.',
              state='New high as of 4:30 PM PDT (reading 20 minutes old): 166 cfs is the highest of this rise so far, +2 cfs on the hour before. The top of this rise is at this reading or later.',
              since='12:00 PM PDT', rise=rise_line('150.1', 150, low_at_1am),
-             noaa=afternoon_issue('2 hours', '166', '4:30 PM PDT'), above='74.2', card=None, tide=afternoon_tide('3 h 29 min')),
+             noaa=afternoon_issue('2 hours', '166', '4:30 PM PDT'), above=above_first('74.2', LEVEL_HOUR), flag=None, card=None, tide=afternoon_tide('3 h 29 min')),
         # 5:20 PM: the 5:00 PM reading falls on the first point of NOAA's 2:36 PM path, so a value for that time exists again.
         dict(name='0520pm', check=pacific(29, 17, 20), state_code='new-high', flow='168', time='at 5:00 PM PDT',
              change='Last hour: +4 cfs (rising). About 3 hours: +11 cfs.',
              state='Still rising as of 5:00 PM PDT (reading 20 minutes old): 168 cfs is the highest of this rise so far, up 4 cfs in the hour before. The top of this rise is at this reading or later.',
              since='12:00 PM PDT', rise=rise_line('152.1', 152, low_at_1am),
-             noaa=noaa_line('2:36 PM PDT', '3 hours', '91.8', '5:00 PM PDT', '168', '76.2'), above='76.2', card='Largest relative rise: 152.1 cfs, or 152% of the 100 cfs May–October reference.',
+             noaa=noaa_line('2:36 PM PDT', '3 hours', '91.8', '5:00 PM PDT', '168', '76.2'), above=above_highest('76.2'), card='Largest relative rise: 152.1 cfs, or 152% of the 100 cfs May–October reference.',
              tide=afternoon_tide('3 h 59 min')),
         dict(name='0720pm', check=pacific(29, 19, 20), state_code='new-high', flow='181', time='at 7:00 PM PDT',
              change='Last hour: +7 cfs (rising). About 3 hours: +17 cfs.',
              state='Still rising as of 7:00 PM PDT (reading 20 minutes old): 181 cfs is the highest of this rise so far, up 7 cfs in the hour before. The top of this rise is at this reading or later.',
              since='12:00 PM PDT', rise=rise_line('165.1', 165, low_at_1am),
-             noaa=noaa_line('2:36 PM PDT', '5 hours', '76', '7:00 PM PDT', '181', '105'), above='105', card='Largest relative rise: 165.1 cfs, or 165% of the 100 cfs May–October reference.',
+             noaa=noaa_line('2:36 PM PDT', '5 hours', '76', '7:00 PM PDT', '181', '105'), above=above_highest('105'), card='Largest relative rise: 165.1 cfs, or 165% of the 100 cfs May–October reference.',
              tide=evening_tide('34 minutes')),   # the 6:46 PM high passed 34 minutes earlier and is still shown
         dict(name='1020pm', check=pacific(29, 22, 20), state_code='paused', flow='191', time='at 10:00 PM PDT',
              change='Last hour: 0 cfs (about level). About 3 hours: +10 cfs.',
              state='No new high since 9:00 PM PDT. ' + PAUSE, high='Highest reading since then: 191 cfs at 9:00 PM PDT.',
              since='12:00 PM PDT', rise=rise_line('175.1', 175, low_at_1am),
-             noaa=noaa_line('2:36 PM PDT', '8 hours', '52.2', '10:00 PM PDT', '191', '138.8'), above='138.8', card='Largest relative rise: 175.1 cfs, or 175% of the 100 cfs May–October reference.',
+             noaa=noaa_line('2:36 PM PDT', '8 hours', '52.2', '10:00 PM PDT', '191', '138.8'), above=above_highest('138.8'), card='Largest relative rise: 175.1 cfs, or 175% of the 100 cfs May–October reference.',
              tide=evening_tide('3 h 34 min')),
-        dict(name='1120pm', check=pacific(29, 23, 20), state_code='may-have-peaked', flow='189', time='at 11:00 PM PDT',
+        # 11:20 PM: two hours of readings with no new high, yet the 11:00 PM reading (189 cfs) is 2 cfs above the 8:00 PM
+        # one. The page prints those two facts, with no "may have peaked", no count and no rain sentence.
+        dict(name='1120pm', check=pacific(29, 23, 20), state_code='may-have-peaked', up_on_three=True, flow='189', time='at 11:00 PM PDT',
              change='Last hour: -2 cfs (about level). About 3 hours: +2 cfs.',
-             state='No new high since 9:00 PM PDT (2 h 0 min of readings): the river may have peaked at 191 cfs. ' + PEAK,
+             state='No new high since 9:00 PM PDT (2 h 0 min of readings), but the river is up 2 cfs on about 3 hours earlier.',
+             high='Highest reading since then: 191 cfs at 9:00 PM PDT.',
              since='12:00 PM PDT', rise=rise_line('173.1', 173, low_at_1am),
-             noaa=noaa_line('2:36 PM PDT', '9 hours', '44.2', '11:00 PM PDT', '189', '144.8'), above='144.8', card='Largest relative rise: 173.1 cfs, or 173% of the 100 cfs May–October reference.',
+             noaa=noaa_line('2:36 PM PDT', '9 hours', '44.2', '11:00 PM PDT', '189', '144.8'), above=above_highest('144.8'), card='Largest relative rise: 173.1 cfs, or 173% of the 100 cfs May–October reference.',
              tide=evening_tide('4 h 34 min')),
+        # 12:20 AM: three hours without a new high and the midnight reading (185 cfs) is below the 9:00 PM one.
+        # "May have peaked", with the count taken from the 2-hour mark.
+        dict(name='1220am-next-day', check=pacific(30, 0, 20), state_code='may-have-peaked', flow='185', time='at 12:00 AM PDT',
+             change='Last hour: -4 cfs (falling). About 3 hours: -6 cfs.',
+             state='No new high since Sep 29, 9:00 PM PDT (3 h 0 min of readings): the river may have peaked at 191 cfs. ' + PEAK,
+             since='Sep 29, 12:00 PM PDT', rise=rise_line('169.1', 169, '15.9 cfs at Sep 29, 1:00 AM PDT'),
+             noaa=noaa_line('Sep 29, 2:36 PM PDT', '10 hours', '43.1', '12:00 AM PDT', '185', '141.9'), above=above_highest('141.9'), card='Largest relative rise: 169.1 cfs, or 169% of the 100 cfs May–October reference.',
+             tide='High of 8.2 ft was at Sep 29, 6:46 PM PDT, 5 h 34 min before this check. The tide is falling to a low of -1.2 ft at 1:56 AM PDT, then a high of 7.8 ft at 9:13 AM PDT.'),
         # The next morning: the measured rise is back under 100 cfs, but the number was passed 20 hours earlier. NOAA
         # reissued at 8:10 AM and its path begins at 11:00 AM. The count is taken from the 12:30 AM reading (181 cfs),
-        # the first at least 5% below the 191 cfs high.
+        # the first at least 5% below the 191 cfs high. The gauge (125 cfs) is 24.7 cfs above NOAA's first value, but it
+        # fell 7 cfs in the last hour: falling toward that value is not being above it. No sentence, no flag, and NOAA's
+        # own words are printed as NOAA's. (When the 11:00 AM point arrived the gauge was inside the line.)
         dict(name='0820am-next-day', check=pacific(30, 8, 20), state_code='falling', flow='125', time='at 8:00 AM PDT',
              change='Last hour: -7 cfs (falling). About 3 hours: -22 cfs.',
              state='Now at least 5% below the high of 191 cfs at Sep 29, 9:00 PM PDT; the river first read that far below it at 12:30 AM PDT. ' + FALLING,
              since='Sep 29, 12:00 PM PDT', rise=rise_line('79', 79, '46 cfs at Sep 29, 8:00 AM PDT'),
-             noaa=noaa_ahead('8:10 AM PDT', '10 minutes', '11:00 AM PDT', '100.3', '100.3', '11:00 AM PDT', '125', '8:00 AM PDT'), above='24.7', card=None,
+             noaa=noaa_ahead('8:10 AM PDT', '10 minutes', '11:00 AM PDT', '100.3', '100.3', '11:00 AM PDT', '125', '8:00 AM PDT'), above=None, flag=None, within=('100.3', '11:00 AM PDT'), card=None,
              tide='Low of -1.2 ft was at 1:56 AM PDT, 6 h 24 min before this check. The tide is rising to a high of 7.8 ft at 9:13 AM PDT, then a low of 5.4 ft at 2:07 PM PDT.'),
     ]
     replay_audits = 0
@@ -1203,6 +1276,9 @@ with sync_playwright() as p:
         shot = f'replay-{order:02d}-{name}'   # numbered so the screenshots sort in time order
         feeds = {'newest': spec['newest']} if 'newest' in spec else {}
         new_high, still_rising = spec['state_code'] == 'new-high', spec['state_code'] == 'new-high' and spec.get('still_rising', True)
+        peak_said = spec['state_code'] == 'may-have-peaked' and not spec.get('up_on_three')   # "may have peaked" is printed
+        ahead = spec['noaa'].count('starts at') == 1                                           # NOAA's path has not reached the reading
+        assert (spec.get('flag', NOT_TRACKING) is None) == ahead, (name, 'no flag is expected exactly where the reading is earlier than NOAA’s first point')
         frame_context, frame, source = open_frame(check, **feeds)
         outlook_text = frame.locator('#outlook').inner_text()
         # Banned words first, so that a banned word is reported as one.
@@ -1212,17 +1288,22 @@ with sync_playwright() as p:
                     'river-past': past(spec['since']),
                     'river-high': spec.get('high'),                                      # its own line only where the state sentence does not name the high
                     'river-new-high-note': AFTER_NEW_HIGH if new_high else None,        # the two-sided sentence follows any new high
-                    'river-rain-note': RAIN_BESIDE_PEAK if spec['state_code'] == 'may-have-peaked' else None,   # beside "may have peaked" only
-                    'river-rise': spec['rise'], 'noaa-compare': spec['noaa'], 'noaa-above': above_highest(spec['above']), 'noaa-flag': NOT_TRACKING, 'tide-now': spec['tide']}
+                    'river-rain-note': RAIN_BESIDE_PEAK if peak_said else None,          # beside "may have peaked" only
+                    # "Not tracking" belongs to the at-the-reading-time comparison: a frame whose reading is earlier
+                    # than NOAA's first point names flag=None.
+                    'river-rise': spec['rise'], 'noaa-compare': spec['noaa'], 'noaa-above': spec['above'], 'noaa-flag': spec.get('flag', NOT_TRACKING), 'tide-now': spec['tide']}
         assert list(expected) == BLOCK_LINES
         for ident, text in expected.items():
             assert lines[ident] == text, (name, ident, lines[ident], text)
         frame_lines[name] = lines
-        assert (spec.get('high') is not None) == (spec['state_code'] == 'paused'), 'the separate high line is expected only beside a pause'
+        assert (spec.get('high') is not None) == (spec['state_code'] == 'paused' or spec.get('up_on_three', False)), 'the separate high line is expected only where the state sentence does not name the high'
         assert frame.evaluate('feed => SamishData.riverState(SamishData.usgs(feed, Date.now()), Date.now()).state', source['payload']['usgs']) == spec['state_code'], (name, 'state code')
         # "May have peaked" is never printed before the 11:00 PM reading. "Still rising" needs a new high AND a last
         # hour that meets the "rising" test; any other new high reads "New high".
-        assert ('may have peaked' in outlook_text) == (name == '1120pm'), (name, 'may-have-peaked wording')
+        assert ('may have peaked' in outlook_text) == (name == '1220am-next-day') == peak_said, (name, 'may-have-peaked wording')
+        assert (str(EVIDENCE['peak2h']['within12h']) + ' (about 1 in') not in lines['river-state'] or peak_said, (name, 'the 2-hour count is printed only beside "may have peaked"')
+        if spec.get('up_on_three'):
+            assert 'may have peaked' not in outlook_text and str(EVIDENCE['rises']['count']) not in frame.locator('#river-block').inner_text() and 'up 2 cfs on about 3 hours earlier' in lines['river-state'], (name, 'up on three hours: no "may have peaked" and no count')
         assert ('Still rising' in outlook_text) == still_rising and ('New high as of' in outlook_text) == (new_high and not still_rising), (name, 'still-rising and new-high wording')
         if name in ('1020pm', '1120pm'):
             assert 'rising' not in lines['river-change'] and 'rising' not in lines['river-state'] and 'rising' not in said(frame, 'watch-title'), (name, 'the river is not called rising after it stopped')
@@ -1232,10 +1313,19 @@ with sync_playwright() as p:
             assert '67 of 172' in lines['river-state'] and '42 of them' in lines['river-state'] and 'may have peaked' not in outlook_text
         # NOAA's current issue is set against the gauge on a first visit: nothing was saved on this device.
         assert said(frame, 'watch-state') == 'NO EARLIER FORECAST', (name, 'a replay frame is a first visit')
-        # From 12:20 PM to the next morning the gauge is above NOAA's forecast: no forecast-to-fall sentence, no
-        # forecast-high time and no tide pairing, whether or not NOAA's path has reached the reading yet.
-        assert said(frame, 'forecast-time') == NO_PEAK_ABOVE and said(frame, 'crest-time') == NO_PEAK_ABOVE, name
-        assert 'forecast to fall' not in outlook_text and 'Forecast high around' not in outlook_text and 'NOAA forecast high around' not in outlook_text and 'has no value for' not in outlook_text, name
+        # From 12:20 PM through the night the gauge is above NOAA's forecast: no falling-forecast sentence, no
+        # forecast-high time and no tide pairing, whether or not NOAA's path has reached the reading yet. The next
+        # morning a comparison is made and the gauge is not above the line, so NOAA's words are printed as NOAA's,
+        # with the first value and its time named.
+        within = spec.get('within')
+        if within:
+            assert said(frame, 'forecast-time') == only_falls(*within) and said(frame, 'crest-time') == 'Highest value is at the forecast’s start' and said(frame, 'crest-detail') == falls_from_first(*within), (name, said(frame, 'forecast-time'), said(frame, 'crest-detail'))
+            assert lines['noaa-above'] is None and lines['noaa-flag'] is None and 'not tracking' not in outlook_text and 'No peak time is read' not in outlook_text, (name, 'falling toward NOAA’s first value: nothing says the gauge is above it')
+        else:
+            assert said(frame, 'forecast-time') == NO_PEAK_ABOVE and said(frame, 'crest-time') == NO_PEAK_ABOVE and said(frame, 'crest-detail') == 'No forecast-high time or tide pairing is shown.', name
+            assert 'falls from its first value (' not in outlook_text and 'That value is not a forecast high' not in outlook_text, (name, 'NOAA’s falling-forecast words are withheld while the gauge is above the line')
+        assert ('not tracking' in outlook_text) == (not ahead), (name, '"not tracking" is said only of the comparison at the reading’s own time')
+        assert 'forecast to fall' not in outlook_text and 'start of the window' not in outlook_text and 'Forecast high around' not in outlook_text and 'NOAA forecast high around' not in outlook_text and 'has no value for' not in outlook_text, name
         assert frame.locator('#crest-nearby .crest-tide').count() == 0 and frame.locator('#forecast-metric').is_hidden(), name
         assert said(frame, 'ops-forecast') == 'Only falls' and said(frame, 'ops-forecast-note').startswith('NOAA’s path falls from its first value · issued '), name
         # The NOAA-based card never says "below the numeric line" while the River block shows the number was passed.
@@ -1243,7 +1333,10 @@ with sync_playwright() as p:
         assert 'below the numeric line' not in outlook_text, (name, 'reassuring line after the number was passed')
         assert said(frame, 'rise-passed') == f'The measured rise passed the 100 cfs number at the {spec["since"]} reading (River block at the top). The figures on this card look forward from the newest reading and do not undo that.', name
         assert said(frame, 'rise-title') == (spec['card'] or NOT_ALIGNED), (name, said(frame, 'rise-title'))
-        assert said(frame, 'rise-noaa-basis') == BUILT_ON_ABOVE, (name, 'the card says what it is built on whenever the gauge is above the forecast, computed or not')
+        if within:
+            assert frame.locator('#rise-noaa-basis').is_hidden(), (name, 'the gauge is not above the forecast: the card carries no "built on" line')
+        else:
+            assert said(frame, 'rise-noaa-basis') == BUILT_ON_ABOVE, (name, 'the card says what it is built on whenever the gauge is above the forecast, computed or not')
         assert said(frame, 'rise-noaa-dry') == NOAA_DRY + ' ' + CAVEAT, name
         assert said(frame, 'rain-context-text') == RAIN_CONTEXT and frame.locator('#rain-context strong').inner_text() == 'Context, not an alert.', name
         assert frame.locator('#tide-heading').inner_text().endswith('Bellingham prediction, not Samish Bay water level or boat clearance'), name
@@ -1331,7 +1424,7 @@ with sync_playwright() as p:
     # A refused reading is not set against NOAA's forecast, no peak time is read, and the NOAA-based card is withheld:
     # the page computes nothing from a reading the River block has refused.
     assert lines['noaa-compare'] == not_compared('2:36 PM PDT', '5 hours', 'the gauge feed is 110 minutes behind'), lines['noaa-compare']
-    assert said(stalled, 'forecast-time') == NO_PEAK_UNCOMPARED and said(stalled, 'crest-time') == NO_PEAK_UNCOMPARED and 'forecast to fall' not in stalled.locator('#outlook').inner_text()
+    assert said(stalled, 'forecast-time') == NO_PEAK_UNCOMPARED and said(stalled, 'crest-time') == NO_PEAK_UNCOMPARED and 'falls from its first value (' not in stalled.locator('#outlook').inner_text()
     assert said(stalled, 'feed-alert') == 'The newest gauge reading is 110 minutes old. Check the dated source details before planning.'
     assert said(stalled, 'rise-title') == 'Withheld: the gauge feed is 110 minutes behind.' and said(stalled, 'rise-status') == 'Unavailable' and said(stalled, 'rise-percent') == '—'
     assert 'Largest relative rise' not in stalled.locator('#outlook').inner_text() and 'numeric line at' not in stalled.locator('#outlook').inner_text() and said(stalled, 'rise-noaa-basis') == BUILT_ON_UNCOMPARED
@@ -1412,9 +1505,24 @@ with sync_playwright() as p:
     lines = river_lines(gapped)
     assert lines['river-past'] == past_gap('1:30 PM PDT') and lines['river-rise'] == rise_at_least('147.1', 147, 180), lines
     assert lines['river-state'] == 'Still rising as of 2:45 PM PDT (reading 5 minutes old): 163 cfs is the highest of this rise so far, up 11 cfs in the hour before. The top of this rise is at this reading or later.', lines['river-state']
-    assert lines['river-change'] == 'Last hour: +11 cfs (rising). About 3 hours: unavailable.' and lines['noaa-flag'] == NOT_TRACKING, lines
-    assert lines['noaa-compare'] == afternoon_issue('14 minutes', '163', '2:45 PM PDT') and lines['noaa-above'] == above_highest('71.2'), lines
+    assert lines['river-change'] == 'Last hour: +11 cfs (rising). About 3 hours: unavailable.' and lines['noaa-flag'] is None, lines
+    assert lines['noaa-compare'] == afternoon_issue('14 minutes', '163', '2:45 PM PDT') and lines['noaa-above'] == above_first('71.2', rose('11')) + also_above('91.8'), lines
     gap_context.close()
+    # Holes inside the 24 hours adding up to exactly 6 hours keep the share; 15 minutes more and the bound is printed
+    # alone, because most of the rise may be hidden. (The readings from 2:15 AM to 7:45 AM, then to 8:00 AM, never arrived.)
+    for last_missing, expected_rise in [(pacific(29, 7, 45), rise_at_least('165.1', 165, 360)), (pacific(29, 8, 0), rise_mostly_hidden('165.1', '6.3'))]:
+        gap_context, gapped, _ = open_frame(pacific(29, 19, 20), hole=(pacific(29, 2, 15), last_missing))
+        assert said(gapped, 'river-rise') == expected_rise, (last_missing, said(gapped, 'river-rise'))
+        gap_context.close()
+    # A 20-hour outage across the whole climb (9:45 PM on the 28th to 6:00 PM on the 29th). At 7:20 PM the bound is
+    # 164.9 cfs above the lowest reading held; no share of the number is printed beside a record that is mostly missing.
+    # The next morning only 10 of those hours lie inside the 24, and the bound is 0 cfs.
+    for check, expected_rise in [(pacific(29, 19, 20), rise_mostly_hidden('164.9', '20.3')), (pacific(30, 8, 20), rise_mostly_hidden('0', '10'))]:
+        gap_context, gapped, _ = open_frame(check, hole=(pacific(28, 22, 0), pacific(29, 17, 45)))
+        assert said(gapped, 'river-rise') == expected_rise and '% of the 100 cfs' not in said(gapped, 'river-rise'), (check, said(gapped, 'river-rise'))
+        if check.day == 29:
+            gapped.screenshot(path=str(out / 'state-rise-mostly-hidden-desktop-1440.png'))
+        gap_context.close()
     # A hole between the highest reading and the newest one still gives no state: the readings from 9:15 to 10:15 PM
     # are missing, the 9:00 PM reading (191 cfs) is the highest held, and the page is opened at 12:05 AM.
     gap_context, gapped, _ = open_frame(pacific(30, 0, 5), newest=pacific(29, 23, 45), hole=(pacific(29, 21, 15), pacific(29, 22, 15)))
@@ -1532,6 +1640,44 @@ with sync_playwright() as p:
             axe_runs += audit_page(climbing, 'climbing-again')
         climb_context.close()
 
+    # ---- "Climbing again" is not printed while the last hour is down (SYNTHETIC gauge; nothing real) ----
+    # A 210 cfs top, a fall to 80 cfs, a second bump to 100 cfs at 5:00 PM, then down again. At 6:00 PM the reading
+    # (96.7 cfs) is 16.7 cfs above the low and 10 cfs above the reading three hours earlier, but it fell 3.3 cfs in the
+    # last hour. Without the last-hour condition the page printed "Climbing again" there.
+    second_bump = knot_series([(pacific(8, 0), 20), (pacific(11, 6), 18), (pacific(11, 12), 150), (pacific(11, 16), 210), (pacific(12, 2), 120), (pacific(12, 14), 80),
+                               (pacific(12, 17), 100), (pacific(12, 20), 90), (pacific(13, 6), 60)])
+    falling_from_210 = 'Now at least 5% below the high of 210 cfs at Sep 11, 4:00 PM PDT; the river first read that far below it at Sep 11, 5:15 PM PDT, more than 24 hours of readings ago.'
+    for check, change, expected_state in [
+            (pacific(12, 17, 20), 'Last hour: +6.7 cfs (rising). About 3 hours: +20 cfs.', 'Up 6.7 cfs in the last hour; the newest reading is 110 cfs below this rise’s high of 210 cfs at Sep 11, 4:00 PM PDT.'),
+            (pacific(12, 18, 20), 'Last hour: -3.3 cfs (falling). About 3 hours: +10 cfs.', falling_from_210),
+            (pacific(12, 19, 20), 'Last hour: -3.4 cfs (falling). About 3 hours: 0 cfs.', falling_from_210)]:
+        bump_context, bumped, _ = open_frame(check, feeds_payload=synthetic_gauge_payload(check, [row for row in second_bump if row[0] <= check.replace(minute=0)]))
+        lines = river_lines(bumped)
+        assert lines['river-change'] == change and lines['river-state'] == expected_state, (check, lines['river-change'], lines['river-state'])
+        assert ('Climbing again' in bumped.locator('#river-block').inner_text()) is False, (check, 'no "Climbing again" on a second bump that the last hour does not support')
+        if check.hour == 18:
+            bumped.screenshot(path=str(out / 'state-second-bump-last-hour-down-desktop-1440.png'))
+        bump_context.close()
+
+    # ---- A new high of this rise while a higher reading is held from an earlier rise (SYNTHETIC gauge; nothing real) ----
+    # An earlier rise topped out at 320 cfs more than 48 hours ago and fell back to 100 cfs; a second rise then passed
+    # the number at 9:45 AM and stands at 210 cfs. "Highest of this rise so far" is true, and the page also names the
+    # 310 cfs reading it still holds from 48 hours back, so the line is not read as the highest of the last two days.
+    newest_reading = plateau_check - timedelta(minutes=20)
+    back = lambda hours: newest_reading - timedelta(hours=hours)
+    two_rises = knot_series([(back(78), 50), (back(54), 50), (back(50), 320), (back(46), 300), (back(20), 100), (back(18), 100), (back(14), 150), (newest_reading, 210)])
+    new_high_of_this_rise = 'New high as of 12:00 PM PDT (reading 20 minutes old): 210 cfs is the highest of this rise so far, +4 cfs on the hour before. The top of this rise is at this reading or later.'
+    for label, series, expected_state in [
+            ('held', two_rises, new_high_of_this_rise + ' A higher reading, 310 cfs at Jul 13, 12:00 PM PDT, is held from before this rise began.'),
+            ('none', [(moment, min(flow_cfs, 205) if moment < back(20) else flow_cfs) for moment, flow_cfs in two_rises], new_high_of_this_rise)]:   # the earlier rise capped at 205 cfs
+        two_context, twice, _ = open_frame(plateau_check, feeds_payload=synthetic_gauge_payload(plateau_check, series))
+        lines = river_lines(twice)
+        assert lines['river-state'] == expected_state, (label, lines['river-state'])
+        assert lines['river-past'] == 'Past the 100 cfs May–October number since the 9:45 AM PDT reading. This page’s arithmetic, not the Department of Health’s decision.' and lines['river-new-high-note'] == AFTER_NEW_HIGH, (label, lines)
+        if label == 'held':
+            twice.screenshot(path=str(out / 'state-new-high-below-an-earlier-rise-desktop-1440.png'))
+        two_context.close()
+
     # ---- Before the number is passed (9:20 AM): no state and no "high" language ----
     # NOAA's 8:19 AM path starts at 11:00 AM with 58.5 cfs, its highest value; the gauge reads 62.5 cfs, 4 cfs above it
     # and inside the 10 cfs line, but it rose 16.5 cfs in the last hour. A rising river already above everything in
@@ -1546,7 +1692,7 @@ with sync_playwright() as p:
     assert early.locator('#rise-passed').is_hidden() and said(early, 'rise-noaa-basis') == BUILT_ON_ABOVE and early.locator('.rise-card h2').inner_text() == 'What NOAA’s forecast adds' and said(early, 'rise-title') == NOT_ALIGNED
     assert said(early, 'crest-time') == NO_PEAK_ABOVE and said(early, 'forecast-time') == NO_PEAK_ABOVE and said(early, 'ops-forecast') == 'Only falls'
     early_text = early.locator('#outlook').inner_text()
-    assert 'forecast to fall' not in early_text and 'not tracking' not in early_text and 'That value is not a forecast high' not in early_text, 'NOAA’s peak-time words are withheld and nothing says "not tracking" before the number is passed'
+    assert 'falls from its first value (' not in early_text and 'not tracking' not in early_text and 'That value is not a forecast high' not in early_text, 'NOAA’s peak-time words are withheld and nothing says "not tracking" before the number is passed'
     assert said(early, 'ops-forecast-note') == 'NOAA’s path falls from its first value · issued 8:19 AM PDT' and said(early, 'rise-noaa-dry') == NOAA_DRY + ' ' + CAVEAT
     assert banned_words(early.locator('#outlook').inner_text()) == []
     early.screenshot(path=str(out / 'replay-00-0920am-before-the-number-desktop-1440.png'))
@@ -1557,7 +1703,7 @@ with sync_playwright() as p:
     lines = river_lines(early)
     assert lines['noaa-compare'] == noaa_line('8:19 AM PDT', '3 hours', '58.1', '11:15 AM PDT', '103', '44.9') and lines['noaa-above'] == above_highest('44.9') and lines['noaa-flag'] is None, lines
     assert lines['river-state'] is None and lines['river-past'] is None and lines['river-rise'] == rise_line('87.1', 87, low_at_1am), lines
-    assert said(early, 'crest-time') == NO_PEAK_ABOVE and said(early, 'forecast-time') == NO_PEAK_ABOVE and said(early, 'rise-noaa-basis') == BUILT_ON_ABOVE and 'forecast to fall' not in early.locator('#outlook').inner_text()
+    assert said(early, 'crest-time') == NO_PEAK_ABOVE and said(early, 'forecast-time') == NO_PEAK_ABOVE and said(early, 'rise-noaa-basis') == BUILT_ON_ABOVE and 'falls from its first value (' not in early.locator('#outlook').inner_text()
     early_context.close()
 
     # ---- One synthetic covered case: a first visit, a NOAA issue exactly 7 hours old whose path covers the reading ----
@@ -1571,16 +1717,30 @@ with sync_playwright() as p:
     first_visit.screenshot(path=str(out / 'state-first-visit-noaa-mismatch-desktop-1440.png'))
     first_context.close()
     # A synthetic path that starts after the reading and later rises above the gauge: 163 cfs against a first value of
-    # 120 cfs and a highest value of 300 cfs. Above the first value while the last hour is "rising" (+6 cfs).
+    # 120 cfs and a highest value of 300 cfs. Above the first value by the line: measured figures, no "not tracking".
     late_path = [((datetime(2026, 9, 30, 0, 0, tzinfo=timezone.utc) + timedelta(hours=6 * step)).isoformat(), 300 if step == 2 else 120) for step in range(16)]
     first_context, first_visit, _ = open_frame(pacific(29, 15, 20), noaa_path=late_path, noaa_issue=pacific(29, 14, 36))
     assert said(first_visit, 'noaa-compare') == noaa_ahead('2:36 PM PDT', '44 minutes', '5:00 PM PDT', '120', '300', 'Sep 30, 5:00 AM PDT', '163', '3:00 PM PDT'), said(first_visit, 'noaa-compare')
-    assert said(first_visit, 'noaa-above') == 'The gauge is 43 cfs above NOAA’s first value and rose in the last hour.' and said(first_visit, 'noaa-flag') == NOT_TRACKING and said(first_visit, 'crest-time') == NO_PEAK_ABOVE
+    assert said(first_visit, 'noaa-above') == above_first('43', rose('6')) and first_visit.locator('#noaa-flag').is_hidden() and said(first_visit, 'crest-time') == NO_PEAK_ABOVE
+    assert 'not tracking' not in first_visit.locator('#outlook').inner_text() and 'It is also above' not in said(first_visit, 'noaa-above')
     first_context.close()
-    # The same path an hour later: the last hour is only "about level" (+1 cfs), the gauge is below the path's highest
-    # value, so it is not above the line; a comparison was made and NOAA's own forecast-high time stands.
+    # The same path an hour later: the last hour is only "about level" (+1 cfs) and the gauge is far below the 300 cfs
+    # that NOAA has for the next morning. One larger value days ahead does not hide the mismatch with NOAA's first
+    # value: the gauge is 44 cfs above it, so it is above the line and NOAA's forecast-high time is not printed.
     first_context, first_visit, _ = open_frame(pacific(29, 16, 20), noaa_path=late_path, noaa_issue=pacific(29, 14, 36))
-    assert first_visit.locator('#noaa-above').is_hidden() and first_visit.locator('#noaa-flag').is_hidden() and said(first_visit, 'crest-time') == 'NOAA forecast high around Sep 30, 5:00 AM PDT'
+    assert said(first_visit, 'noaa-above') == above_first('44', LEVEL_HOUR) and first_visit.locator('#noaa-flag').is_hidden(), said(first_visit, 'noaa-above')
+    assert said(first_visit, 'crest-time') == NO_PEAK_ABOVE and said(first_visit, 'forecast-time') == NO_PEAK_ABOVE and 'forecast high around' not in first_visit.locator('#outlook').inner_text().lower()
+    assert said(first_visit, 'rise-noaa-basis') == BUILT_ON_ABOVE and 'not tracking' not in first_visit.locator('#outlook').inner_text()
+    first_visit.screenshot(path=str(out / 'state-above-noaa-first-value-desktop-1440.png'))
+    first_context.close()
+    # NOAA's own words when its path is highest at its first value but dips and partly recovers (INVENTED path: 120,
+    # 100, 110, then lower). The gauge, 125 cfs and falling, is inside the line. The path does not only fall, so the page
+    # does not say it falls: it says no later value is higher than the first, and names that value and its time.
+    dipping_path = [((datetime(2026, 9, 30, 18, 0, tzinfo=timezone.utc) + timedelta(hours=6 * step)).isoformat(), [120, 100, 110][step] if step < 3 else 90 - step) for step in range(16)]
+    first_context, first_visit, _ = open_frame(pacific(30, 8, 20), noaa_path=dipping_path, noaa_issue=pacific(30, 8, 10))
+    assert first_visit.locator('#noaa-above').is_hidden() and first_visit.locator('#noaa-flag').is_hidden() and first_visit.locator('#rise-noaa-basis').is_hidden()
+    assert said(first_visit, 'forecast-time') == 'Highest at the start of this forecast window' and said(first_visit, 'crest-time') == 'Highest value is at the forecast’s start'
+    assert said(first_visit, 'crest-detail') == 'No later value in NOAA’s forecast is higher than its first (120 cfs at 11:00 AM PDT). No future high time is inferred.', said(first_visit, 'crest-detail')
     first_context.close()
 
     # ---- One device left open through the afternoon and evening: what a screen reader is told, and the earlier-forecast headline ----
@@ -1596,14 +1756,17 @@ with sync_playwright() as p:
         settle(stay)
         return stay.evaluate('window.__told')
     assert advance(pacific(29, 12, 25)) == [], 'a refresh with no change of state announces nothing'
-    paused_at_415 = 'No new high since 3:15 PM PDT. ' + PAUSE
+    # At 4:35 PM the newest reading is earlier than the first point of NOAA's 2:36 PM path: the "not tracking" flag has
+    # gone, and the measured sentence that replaced it is told once, after the river's own sentence.
+    paused_at_415 = 'No new high since 3:15 PM PDT. ' + PAUSE + ' ' + above_first('72.2', LEVEL_HOUR)
     assert advance(pacific(29, 16, 35), newest=pacific(29, 16, 15)) == [paused_at_415], 'the pause is announced once'
     # The forecast saved at the 12:20 PM visit is now 4 hours old: the earlier-forecast check runs, and its headline
     # takes its word from the last hour (level), not from the three-hour change (+22 cfs).
     assert said(stay, 'watch-state') == 'ABOVE EARLIER FORECAST' and said(stay, 'watch-title') == 'River is above the earlier NOAA forecast, but not rising in the last hour of readings'
     assert advance(pacific(29, 16, 40), newest=pacific(29, 16, 15)) == [paused_at_415], 'the same state is not announced again on the next refresh'
     told = advance(pacific(29, 19, 20))
-    assert told == [paused_at_415, frame_state['0720pm']], told
+    # NOAA's path now covers the reading and the flag is back on the page: it is told again, once.
+    assert told == [paused_at_415, frame_state['0720pm'] + ' ' + NOT_TRACKING], told
     assert said(stay, 'watch-title') == 'River is above the earlier NOAA forecast and rising in the last hour of readings' and said(stay, 'watch-change') == '+17'
     told = advance(pacific(29, 22, 20))
     assert told[2:] == [frame_state['1020pm']], told
@@ -1716,18 +1879,24 @@ with sync_playwright() as p:
     assert page.locator('#river-rules li').count() == 14
     for literal in [f"recent for {RULES['freshMinutes']} minutes", 'recent for 90 minutes', 'more than 60 minutes of readings are missing inside the last hour', 'stamped more than 5 minutes after this device’s time',
                     'never against this device’s clock', 'within 20 minutes either way', '“rising” only at +2 cubic feet per second (cfs) and +2% or more', '“falling” only at −2 cfs and −2% or beyond',
-                    'it is printed as “at least”, a lower bound above the lowest reading held', 'never as zero or as “no rise”', 'rounded down, here and on the rise card',
+                    'it is printed as “at least”, a lower bound above the lowest reading held', 'add up to more than 6 hours, the bound is printed without its share of the seasonal number',
+                    'never as zero or as “no rise”', 'rounded down, here and on the rise card',
                     'first reading of the last 48 hours', 'remembered for 48 hours of readings', 'the page then says “since at or before”', 'its readings do not reach back to where that rise began',
                     'strictly higher than every earlier reading of this rise. An equal reading is not a new high.', 'otherwise the page says “New high”',
+                    'a higher reading from the last 48 hours is held from before this rise began, the new-high line names it',
+                    'After 120 minutes with no new high, while the newest reading is higher than the one about three hours earlier, the page prints those two facts instead of “may have peaked”, with no count',
                     '60 minutes of readings with no new high is called a pause; 120 minutes or more is “may have peaked”', 'at least 5% below the high is “falling”',
-                    'above the lowest reading since the high by at least 5% of the high and the about-three-hour change is positive',
+                    'above the lowest reading since the high by at least 5% of the high, the about-three-hour change is positive and the last-hour change is not negative',
                     'the count beside “may have peaked” from the 2-hour mark', 'more than 24 hours of readings past that point',
-                    'A NOAA path starts some hours after it is issued', 'the highest value anywhere in the path, or against the path’s first value when the last-hour change is “rising”',
-                    'at 10% of the seasonal number or more', 'above the highest value in NOAA’s forecast by any amount while the last-hour change is “rising”', 'so it works on a first visit', 'printed only when that comparison was made and the gauge is not above the line',
+                    'A NOAA path starts some hours after it is issued', 'Until its first point is reached no value is invented for the reading’s time',
+                    'above the path’s first value by that 10% or more while the last-hour change is not “falling”', 'prints the measured figures only and does not say “not tracking”',
+                    'at 10% of the seasonal number or more', 'above the highest value in NOAA’s forecast by any amount while the last-hour change is “rising”', 'so it works on a first visit',
+                    'or that its forecast falls from its first value) are printed only when that comparison was made and the gauge is not above the line',
                     'the NOAA-based rise card (“What NOAA’s forecast adds”) is withheld for the same reason', 'look-backs on 172 Samish rises of 2011 to 2023 (15-minute readings)',
                     'keeps the last high or low after it passes', 'hatched “no data” column', 'report 0.25 inch or more is marked suspect', 'May to October only', 'beside “may have peaked” only']:
         assert literal in rules_text, ('display rule missing from the Sources tab', literal)
     assert 'more than 2 hours old are marked stale' not in page.locator('#sources').inner_text()
+    assert 'highest value anywhere in the path' not in rules_text and 'forecast to fall' not in rules_text, 'the rule that was withdrawn is not still described'
     page.locator('#tab-outlook').click()
     assert 'v7 / October 2026' in page.locator('footer').inner_text() and page.evaluate("[...document.querySelectorAll('link[rel=stylesheet], script[src]')].every(el => (el.href || el.src).endsWith('?v=7'))")
     # The flow figure is the largest type on every tab of the desktop page.
