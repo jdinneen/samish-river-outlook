@@ -32,11 +32,18 @@ What changed:
   minutes old, or a hole of more than 60 minutes in the last hour, gives “Cannot
   tell whether the river is rising” and no change figure.
 - **NOAA block.** The current National Oceanic and Atmospheric Administration
-  (NOAA) forecast issue is set against the gauge at the time of the newest
-  reading. When the gauge is higher by at least 10% of the seasonal number while
-  a measured rise is in progress, the page says the forecast is not tracking the
-  rise and reads no peak time from it. This uses no saved history, so it works on
-  a first visit.
+  (NOAA) forecast issue is set against the gauge. A NOAA forecast path starts at
+  its next six-hourly point, some hours after it is issued. When the path covers
+  the time of the newest gauge reading, NOAA’s value for that time is set against
+  the reading. Until it does, the reading is set against the highest value
+  anywhere in the path, or against the path’s first value while the last-hour
+  change is “rising”. When the gauge is higher by at least 10% of the seasonal
+  number while a measured rise is in progress, the page says the forecast is not
+  tracking the rise. This uses no saved history, so it works on a first visit.
+- NOAA’s peak-time words (a forecast-high time, or “forecast to fall”) appear
+  only when that comparison was made and the gauge is not above the line.
+  Otherwise the page says no peak time is read, either because the gauge is above
+  the forecast or because the two cannot be compared right now.
 - **Tide block.** The last Bellingham high or low stays on screen after it
   passes, with the direction and the next two.
 - The earlier-forecast comparison says “rising” only when the last-hour change
@@ -45,6 +52,8 @@ What changed:
   “below the numeric line” while the measured rise has passed the number in the
   last 48 hours of readings. It is withheld, with the reason, whenever the River
   block cannot tell, so no rise is computed from a reading the block has refused.
+  When it is shown while the gauge is above NOAA’s forecast, it says the forward
+  look is built on that forecast.
 - A six-hour rain block with no value is drawn as a hatched “no data” column
   instead of an empty space that looks like zero. One observed-rain gauge at
   0.00 inch for 24 hours while both others report 0.25 inch or more is marked
@@ -64,6 +73,23 @@ Meaning and limits of the new blocks:
 - A new high is any reading strictly higher than every earlier reading of the
   rise; an equal reading is not one. The last-hour change is called “rising”
   only at +2 cubic feet per second (cfs) and +2% or more.
+- A reading below an earlier top is called climbing again when its last-hour
+  change is “rising”, or when it stands above the lowest reading since that top
+  by at least 5% of the top and the about-three-hour change is positive. Without
+  the second test a slow second climb read as “falling”.
+- “This rise” starts at a fresh upward crossing of the seasonal number inside
+  the last 48 hours of readings. When the readings do not reach back to where a
+  rise began, the page says so, names the highest reading it holds, and prints no
+  pause, peak or falling line and no count.
+- One hole of more than 60 minutes no longer blanks the measured rise for a day:
+  the rise above the lowest reading held is printed as “at least”, a lower bound,
+  and the passing of the number as “since at or before”.
+- When the newest gauge reading is stamped more than 5 minutes after the
+  device’s time, the device clock is behind the gauge. The page says so and
+  prints no age, no change figure and no state.
+- After a new high the page prints both sides of what past rises did: the top
+  came within the next 2 hours about 1 time in 4, and was still 8 hours or more
+  away about 1 time in 4 (4,027 new-high readings in 172 rises).
 - The sentences describe readings already taken. No sentence says the top of a
   rise has passed, and the page prints no clock time and no countdown for it.
   “Paused” (60 minutes of readings with no new high), “may have peaked” (120
@@ -74,12 +100,17 @@ Meaning and limits of the new blocks:
   readings past that point, the longest span the count covers.
 - Those counts are read from one object, `SamishData.EVIDENCE` in `data.js`: 172
   Samish rises of 2011 to 2023 at 15-minute readings, and three look-backs on
-  forecasts. Each entry names its period and source. Each is a look-back on past
+  forecasts (two of them cover July 2018 to early October 2026). Each entry names its period and source. Each is a look-back on past
   years, not a forecast, and none is a chance for the next rise. The display
   rules are in `SamishData.RIVER_RULES`; the Sources tab prints them.
 - The dry-season rain paragraph is counted on a different rain forecast from the
   two points the page shows and has not been checked against them. The page
-  computes no rain rule, colour or percentage.
+  computes no rain rule, colour or percentage. The two rain sentences appear
+  beside “may have peaked” only.
+- The 100, 200 and 400 cfs numbers and the 24-hour period are as published in the
+  Washington Department of Health’s growing-area map record for Samish Bay (record
+  dated 4 September 2026, read 13 October 2026). How the Department sets the
+  starting flow, and its clock at a season boundary, are not published there.
 - The measured rise is this page’s arithmetic, not the Department of Health’s
   decision. No fitted model supplies any value on the page.
 
@@ -127,7 +158,7 @@ during a storm:
   validated sampling window.
 - The seasonal screen is a transparent planning calculation, not the Department
   of Health formula. It uses one constant gauge alignment, a strictly earlier
-  rolling 24-hour low, and the confirmed seasonal numbers: 400 cubic feet per
+  rolling 24-hour low, and the published seasonal numbers: 400 cubic feet per
   second (cfs) in November–February, 200 cfs in March–April, and 100 cfs in
   May–October. It reports the rise with the highest share of the seasonal number
   that applies at that point; across a seasonal boundary, this may differ from
@@ -196,15 +227,18 @@ already holds, sends no request, and an injected legend or layer failure never
 reaches the page (the version 6 suite failed that way in this environment). The
 version 7 replay fixes the device clock with Playwright’s clock interface.
 
-Version 7 adds 254 numerical contracts for the river, forecast, tide, rain and
+Version 7 adds 295 numerical contracts for the river, forecast, tide, rain and
 look-back rules, and a replay of the rise of 29 September 2026 through the page
-with the clock fixed: nine moments from 12:20 PM to 8:20 AM the next day, at
+with the clock fixed: ten moments from 12:20 PM to 8:20 AM the next day, at
 desktop and phone sizes, with every River, NOAA and Tide sentence asserted
-exactly. The 15-minute gauge readings and the tide predictions in that replay
-are real; NOAA’s forecast path, the rain and the radar in it are invented and
-are marked so in the test file. Further checks cover a stalled feed and a hole
-in the readings, a first visit, a rise older than the readings compared, a
-count past its 24 hours (on invented and synthetic readings, marked so), the
+exactly. The 15-minute gauge readings, the tide predictions and the NOAA river
+forecast issues in that replay are real (each moment is served the newest issue
+stamped at or before it); the rain and the radar in it are invented and are
+marked so in the test file. Further checks cover a stalled feed and a hole in
+the readings, a device clock that is behind, a device outside the Pacific time
+zone, a first visit, a rise older than the readings compared, a second climb
+below an earlier top, a count past its 24 hours (the last two on invented or
+synthetic readings, marked so), the
 phone windows 390 by 664 and 375 by 548 with minimum type sizes, a missing rain
 block against a zero one, every look-back count on the page against the
 evidence object, words that must not appear on the Outlook tab, and what a

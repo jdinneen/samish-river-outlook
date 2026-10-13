@@ -606,7 +606,11 @@
   //   riseMemoryHours 48           how long a passed seasonal number is remembered
   //   lastHourToleranceMinutes 20  the "hour before" reading must lie within 60 +/- 20 minutes of the newest
   //   maxGapMinutes 60             a longer hole in the readings (last hour, 24-hour low, since the high): cannot tell
-  const RIVER_RULES = Object.freeze({ freshMinutes: 90, pauseMinutes: 60, peakMinutes: 120, fallingFraction: 0.05, risingCfs: 2, risingFraction: 0.02, riseMemoryHours: 48, lastHourToleranceMinutes: 20, maxGapMinutes: 60 });
+  //   climbBackFraction 0.05       a reading below the high that is this share of the high above the lowest reading
+  //                                since the high, with a positive about-three-hour change, is "rising again"
+  //   clockBehindMinutes 5         a newest reading stamped more than this after the device's check time: the
+  //                                device clock is behind the gauge, and nothing is said about the river
+  const RIVER_RULES = Object.freeze({ freshMinutes: 90, pauseMinutes: 60, peakMinutes: 120, fallingFraction: 0.05, risingCfs: 2, risingFraction: 0.02, riseMemoryHours: 48, lastHourToleranceMinutes: 20, maxGapMinutes: 60, climbBackFraction: 0.05, clockBehindMinutes: 5 });
   // RAIN_RULES (frozen). suspectZeroOtherGaugesIn: the 24-hour total both other gauges must reach before
   // a gauge reading exactly zero is marked suspect. dryMonths: Pacific months in which the dry-season
   // rain context applies.
@@ -628,18 +632,30 @@
       .filter(r => typeof r.t === 'number' && Number.isFinite(r.t) && r.q !== null && r.q >= 0 && r.t <= now).sort((a, b) => a.t - b.t);
     return clean.some((r, i) => i && r.t === clean[i - 1].t) ? null : clean;
   }
-  // Lowest reading in the 24 hours ending at rows[i] (both ends included; the EARLIEST on a tie).
-  // Null unless the readings reach back to at least 24 hours before rows[i] with no hole over
-  // maxGapMinutes anywhere in between.
-  function low24At(rows, i) {
+  // The 24 hours ending at rows[i] (both ends included). Returns { t, q, exact, gapMinutes } for the lowest reading
+  // held in them (the EARLIEST on a tie), or null when the readings do not reach back 24 hours at all.
+  //   exact true   the readings reach back the full 24 hours with no hole over maxGapMinutes: this is the 24-hour low
+  //   exact false  there is such a hole (gapMinutes: the largest one), so a lower reading may have been missed and
+  //                a rise measured from this reading is only a LOWER BOUND
+  function lowIn24At(rows, i) {
     const start = rows[i].t - 24 * H, gap = RIVER_RULES.maxGapMinutes * MIN;
-    let low = rows[i], j = i;
+    let low = rows[i], j = i, hole = 0;
     while (j > 0 && rows[j].t > start) {
-      if (rows[j].t - rows[j - 1].t > gap) return null;
+      hole = Math.max(hole, rows[j].t - rows[j - 1].t);
       j--;
       if (rows[j].t >= start && rows[j].q <= low.q) low = rows[j];
     }
-    return rows[j].t <= start ? { t: low.t, q: low.q } : null;
+    if (rows[j].t > start) return null;
+    return { t: low.t, q: low.q, exact: hole <= gap, gapMinutes: hole > gap ? Math.round(hole / MIN) : null };
+  }
+  // The newest valid reading whatever its time stamp; used to notice a device clock that is behind the gauge.
+  function newestStamped(rows) {
+    let newest = null;
+    for (const r of Array.isArray(rows) ? rows : []) {
+      const q = number(r?.q);
+      if (typeof r?.t === 'number' && Number.isFinite(r.t) && q !== null && q >= 0 && (!newest || r.t > newest.t)) newest = { t: r.t, q };
+    }
+    return newest;
   }
   // Reading nearest to `minutesBack` before rows[i], within the tolerance; the more recent on a tie.
   function readingNear(rows, i, minutesBack, toleranceMinutes) {
@@ -665,19 +681,23 @@
   }
   // riverState(rows, now) -- the measured River block. Reads the gauge only; nothing here reads NOAA's forecast.
   //   rows  observed readings [{ t, q }, ...] in any order (the page's merged gauge series; extra fields are
-  //         ignored; rows with an invalid time or flow, or dated after `now`, are dropped)
+  //         ignored; rows with an invalid time or flow are dropped). Hand it EVERY reading the feed supplied,
+  //         including any stamped after `now`: that is how a device clock that is behind is noticed.
   //   now   the device's check time
   // Returns one object, always with every key below:
   //   available        false when there is no usable reading (then reading and ageMinutes are null)
   //   reason           plain words when not available, not fresh, or the state is 'cannot-tell'; else null
   //   checkTime        `now`
-  //   reading          { t, q } the newest reading at or before `now`
+  //   reading          { t, q } the newest reading at or before `now` (for 'clock-behind': the newest reading as stamped)
   //   ageMinutes       whole minutes (rounded down) from the reading to the check time; print it beside the reading
+  //                    (null for 'clock-behind': no age can be trusted)
   //   fresh            ageMinutes <= 90 AND no hole over 60 minutes in the last 60 minutes of readings.
   //                    When false EVERY field below is null (riseStatus is 'unknown'): no change figure, no state.
-  //   staleCode        null when fresh; else 'no-reading' | 'old-reading' | 'gap-in-last-hour'
+  //   staleCode        null when fresh; else 'no-reading' | 'old-reading' | 'gap-in-last-hour' | 'clock-behind'
   //   gapMinutes       size of the hole that caused 'gap-in-last-hour' or 'cannot-tell' (null when the readings
   //                    simply do not reach back one hour, and null otherwise)
+  //   clockBehindMinutes  for 'clock-behind' only: whole minutes by which the newest reading is stamped AFTER `now`
+  //                    (more than clockBehindMinutes; a reading up to 5 minutes ahead is simply not used yet)
   //   lastHour         { change, percent, label, before: { t, q }, spanMinutes } or null when no reading lies
   //                    within 60 +/- 20 minutes before the newest. label is 'rising' (change >= +2 cfs AND >= +2%
   //                    of the earlier reading), 'falling' (<= -2 cfs AND <= -2%) or 'about level'.
@@ -687,34 +707,47 @@
   //   low24            { t, q } lowest reading of the 24 hours ending at the reading (earliest on a tie); null
   //                    unless readings reach back 24 hours with no hole over 60 minutes
   //   rise             { cfs, share } reading minus low24, and that as a fraction of threshold.cfs; null with low24
+  //   lowHeld24        null unless low24 is unavailable ONLY because of holes; then { t, q, gapMinutes }: the lowest
+  //                    reading held in those 24 hours and the largest hole. A lower reading may have been missed.
+  //   riseAtLeast      { cfs, share } reading minus lowHeld24: a LOWER BOUND on the rise; null with lowHeld24
   //   riseStatus       'in-progress' a seasonal number was passed within the last 48 hours of readings
   //                    'none'        the newest reading's own rise is computable and no such passing was found
-  //                    'unknown'     not fresh, or the 24-hour low is unavailable and no passing was found:
+  //                    'unknown'     not fresh, or the exact 24-hour low is unavailable and no passing was found:
   //                                  the page must NOT print this as "no rise"
   //   riseStart        null unless 'in-progress'; else { t, q, riseCfs, low: { t, q }, threshold: { label, cfs },
-  //                    atOrBefore }: the EARLIEST reading of the last 48 hours whose own 24-hour rise was at or
-  //                    above the seasonal number in force AT THAT READING (threshold is that number, which can
-  //                    differ from the top-level threshold across a season boundary). atOrBefore is true when
-  //                    it is the earliest computable reading of the span: the number was passed at or before
-  //                    it, so print "since at or before", and treat `high` as the highest reading of the
-  //                    remembered 48 hours, which can be lower than the true top of an older rise.
-  //                    A second surge inside the 48 hours belongs to the same rise.
-  //   high             null unless 'in-progress'; else { t, q } highest reading from riseStart to the newest,
-  //                    the EARLIEST on equal values (a tie is not a new high)
+  //                    atOrBefore, lowerBound }. A reading counts as at or above the number when its rise over its
+  //                    own 24-hour low (or, with a hole, its LOWER BOUND over the lowest reading held) reaches the
+  //                    seasonal number in force AT THAT READING. The start is the earliest such reading of the last
+  //                    48 hours that is a fresh upward crossing (the previous computable reading, no more than 60
+  //                    minutes earlier, was below the number). When no fresh crossing exists in the span, it is the
+  //                    earliest reading at or above the number, with atOrBefore true: the number was passed at or
+  //                    before it. lowerBound true: that reading's rise is a lower bound, so a gap in the record
+  //                    hides the exact time. A second surge after a fresh crossing belongs to the same rise.
+  //   high             null unless 'in-progress'; else { t, q }, the EARLIEST on equal values (a tie is not a new
+  //                    high): the highest reading from riseStart to the newest; or, when riseStart is atOrBefore
+  //                    and not lowerBound (the rise is older than the readings compared), the highest reading held
+  //                    in the whole last 48 hours
   //   minutesSinceHigh whole minutes of READING time from high to the newest reading (0 when it is the newest)
   //   belowHigh        { cfs, fraction } how far the newest reading is below high (0 and 0 at the high)
+  //   lowSinceHigh     { t, q } the lowest reading after high (earliest on a tie); null when high is the newest
+  //   risingAgainBasis null unless state is 'rising-again'; then 'last-hour' (lastHour.label is 'rising') or
+  //                    'climb-back' (the newest reading is above lowSinceHigh by at least climbBackFraction of the
+  //                    high AND the about-three-hour change is positive)
   //   state            null unless fresh and 'in-progress'; else exactly one of, tested in this order:
   //                    'cannot-tell'     a hole over 60 minutes lies between the high and the newest reading
   //                    'new-high'        the newest reading is the high
-  //                    'rising-again'    lastHour.label is 'rising' and the newest reading is below the high
+  //                    'rising-again'    the newest reading is below the high and either basis above holds
   //                    'falling'         the newest reading is at least 5% below the high
   //                    'may-have-peaked' 120 minutes or more of readings since the high
   //                    'paused'          60 to 119 minutes
   //                    'just-off-high'   under 60 minutes
   function riverState(rows, now) {
     const R = RIVER_RULES, gap = R.maxGapMinutes * MIN;
-    const absent = { fresh: false, staleCode: null, gapMinutes: null, lastHour: null, threeHour: null, threshold: null, low24: null, rise: null, riseStatus: 'unknown', riseStart: null, high: null, minutesSinceHigh: null, belowHigh: null, state: null };
+    const absent = { fresh: false, staleCode: null, gapMinutes: null, clockBehindMinutes: null, lastHour: null, threeHour: null, threshold: null, low24: null, rise: null, lowHeld24: null, riseAtLeast: null, riseStatus: 'unknown', riseStart: null, high: null, minutesSinceHigh: null, belowHigh: null, lowSinceHigh: null, risingAgainBasis: null, state: null };
     const clean = gaugeReadings(rows, now), checkTime = typeof now === 'number' && Number.isFinite(now) ? now : null;
+    // A newest reading stamped well after the device's time means the device clock is behind: say so, and nothing else.
+    const stamped = clean ? newestStamped(rows) : null;
+    if (stamped && stamped.t - now > R.clockBehindMinutes * MIN) return { available: true, reason: 'The newest gauge reading is stamped after this device’s time', checkTime, reading: stamped, ageMinutes: null, ...absent, staleCode: 'clock-behind', clockBehindMinutes: Math.floor((stamped.t - now) / MIN) };
     if (!clean || !clean.length) return { available: false, reason: clean ? 'No gauge reading at or before the check time' : 'Gauge readings could not be read', checkTime, reading: null, ageMinutes: null, ...absent, staleCode: 'no-reading' };
     const i = clean.length - 1, last = clean[i], ageMinutes = Math.floor((now - last.t) / MIN);
     const base = { available: true, reason: null, checkTime, reading: { t: last.t, q: last.q }, ageMinutes, ...absent };
@@ -728,34 +761,48 @@
     const lastHour = earlier ? { change: last.q - earlier.q, percent: earlier.q > 0 ? (last.q - earlier.q) / earlier.q * 100 : null, label: lastHourLabel(last.q - earlier.q, earlier.q), before: { t: earlier.t, q: earlier.q }, spanMinutes: (last.t - earlier.t) / MIN } : null;
     const three = recentChange(clean, last, 3, now);
     const threeHour = three ? { change: three.change, before: { t: three.before.t, q: three.before.q }, spanMinutes: (last.t - three.before.t) / MIN } : null;
-    const threshold = thresholdAt(last.t), low24 = low24At(clean, i);
+    const threshold = thresholdAt(last.t), window24 = lowIn24At(clean, i);
+    const low24 = window24 && window24.exact ? { t: window24.t, q: window24.q } : null;
     const rise = low24 && threshold ? { cfs: last.q - low24.q, share: (last.q - low24.q) / threshold.cfs } : null;
-    // "This rise": the earliest reading of the remembered span at or above the number in force at that reading.
+    const lowHeld24 = window24 && !window24.exact ? { t: window24.t, q: window24.q, gapMinutes: window24.gapMinutes } : null;
+    const riseAtLeast = lowHeld24 && threshold ? { cfs: last.q - lowHeld24.q, share: (last.q - lowHeld24.q) / threshold.cfs } : null;
+    // "This rise": the earliest fresh upward crossing of the remembered span; failing that, the earliest reading
+    // at or above the number in force at that reading (the number was then passed at or before it).
     const spanStart = last.t - R.riseMemoryHours * H;
-    let riseStart = null, startIndex = -1, previous = null;
-    for (let k = 0; k <= i && !riseStart; k++) {
+    let firstAbove = null, crossing = null, prior = null;
+    for (let k = 0; k <= i && !crossing; k++) {
       if (clean[k].t < spanStart) continue;
-      const low = low24At(clean, k), number24 = thresholdAt(clean[k].t);
-      if (!low || !number24) continue;
-      const riseCfs = clean[k].q - low.q;
-      if (riseCfs >= number24.cfs - EPS) { riseStart = { t: clean[k].t, q: clean[k].q, riseCfs, low, threshold: number24, atOrBefore: !previous || clean[k].t - previous.t > gap }; startIndex = k; }
-      else previous = clean[k];
+      const window = lowIn24At(clean, k), number24 = thresholdAt(clean[k].t);
+      if (!window || !number24) continue;
+      const riseCfs = clean[k].q - window.q, above = riseCfs >= number24.cfs - EPS;
+      if (!above && !window.exact) continue;   // only a lower bound, and it is under the number: cannot be told
+      if (above) {
+        const fresh = !!prior && prior.below && clean[k].t - prior.t <= gap;
+        const found = { index: k, t: clean[k].t, q: clean[k].q, riseCfs, low: { t: window.t, q: window.q }, threshold: number24, atOrBefore: !fresh, lowerBound: !window.exact };
+        if (fresh) crossing = found; else if (!firstAbove) firstAbove = found;
+      }
+      prior = { t: clean[k].t, below: !above };
     }
+    const chosen = crossing || firstAbove, riseStart = chosen ? { t: chosen.t, q: chosen.q, riseCfs: chosen.riseCfs, low: chosen.low, threshold: chosen.threshold, atOrBefore: chosen.atOrBefore, lowerBound: chosen.lowerBound } : null;
     const riseStatus = riseStart ? 'in-progress' : rise ? 'none' : 'unknown';
-    const result = { ...base, fresh: true, lastHour, threeHour, threshold, low24, rise, riseStatus, riseStart };
+    const result = { ...base, fresh: true, lastHour, threeHour, threshold, low24, rise, lowHeld24, riseAtLeast, riseStatus, riseStart };
     if (!riseStart) return result;
-    let top = startIndex;
-    for (let k = startIndex + 1; k <= i; k++) if (clean[k].q > clean[top].q) top = k;
-    let hole = 0;
-    for (let k = top + 1; k <= i; k++) hole = Math.max(hole, clean[k].t - clean[k - 1].t);
+    // A rise older than the readings compared has no known start: its high is the highest reading held in the span.
+    const from = riseStart.atOrBefore && !riseStart.lowerBound ? clean.findIndex(r => r.t >= spanStart) : chosen.index;
+    let top = from;
+    for (let k = from + 1; k <= i; k++) if (clean[k].q > clean[top].q) top = k;
+    let hole = 0, lowAfter = null;
+    for (let k = top + 1; k <= i; k++) { hole = Math.max(hole, clean[k].t - clean[k - 1].t); if (!lowAfter || clean[k].q < lowAfter.q) lowAfter = clean[k]; }
     const high = { t: clean[top].t, q: clean[top].q }, sinceHigh = last.t - high.t, drop = high.q - last.q;
+    const byLastHour = lastHour?.label === 'rising' && last.q < high.q;
+    const byClimbBack = !!lowAfter && last.q < high.q && last.q - lowAfter.q >= R.climbBackFraction * high.q - EPS && !!threeHour && threeHour.change > 0;
     const state = hole > gap ? 'cannot-tell'
       : top === i ? 'new-high'
-        : lastHour?.label === 'rising' && last.q < high.q ? 'rising-again'
+        : byLastHour || byClimbBack ? 'rising-again'
           : drop >= R.fallingFraction * high.q - EPS ? 'falling'
             : sinceHigh >= R.peakMinutes * MIN ? 'may-have-peaked'
               : sinceHigh >= R.pauseMinutes * MIN ? 'paused' : 'just-off-high';
-    return { ...result, reason: state === 'cannot-tell' ? 'Gauge readings are missing between the highest reading and the newest one' : null, gapMinutes: state === 'cannot-tell' ? Math.round(hole / MIN) : null, high, minutesSinceHigh: Math.floor(sinceHigh / MIN), belowHigh: { cfs: drop, fraction: high.q > 0 ? drop / high.q : 0 }, state };
+    return { ...result, reason: state === 'cannot-tell' ? 'Gauge readings are missing between the highest reading and the newest one' : null, gapMinutes: state === 'cannot-tell' ? Math.round(hole / MIN) : null, high, minutesSinceHigh: Math.floor(sinceHigh / MIN), belowHigh: { cfs: drop, fraction: high.q > 0 ? drop / high.q : 0 }, lowSinceHigh: lowAfter ? { t: lowAfter.t, q: lowAfter.q } : null, risingAgainBasis: state === 'rising-again' ? (byLastHour ? 'last-hour' : 'climb-back') : null, state };
   }
   // forecastOnlyFalls(fc) -- "NOAA's path only falls from its first point".
   //   fc  the object D.forecast(...) returns (its rows start at the check time, or at NOAA's first future value)
@@ -774,38 +821,61 @@
   //                 the same rows handed to D.forecast; NOT fc.rows, which start at the check time)
   //   issued        NOAA's issue time: the ISO string D.forecast takes, or epoch milliseconds
   //   now           the device's check time
+  // A real NOAA path starts at the next six-hourly point AFTER its issue stamp, so for a few hours after every
+  // issue the newest gauge reading is earlier than the path's first point. Two cases are therefore compared:
+  //   covered  the reading lies inside the path: NOAA's value for the reading's time (straight line between
+  //            forecast points no more than 6 hours apart) is set against the gauge. Above the line when the
+  //            gauge is higher by at least the line.
+  //   ahead    the reading is earlier than the path's first point: no value is invented for the reading's time.
+  //            Above the line when the gauge is above the HIGHEST value anywhere in the path by the line, OR
+  //            above the path's FIRST value by the line while the river's last-hour label is 'rising'.
   // Returns one object, always with every key below:
-  //   code            'not-tracking' the gauge is above NOAA's value by at least the line AND a rise is in progress
-  //                   'above-line'   above by at least the line, and riverState found no rise in progress
-  //                   'within-line'  not above NOAA's value by the line
+  //   code            'not-tracking' above the line AND a rise is in progress
+  //                   'above-line'   above the line, and riverState found no rise in progress
+  //                   'within-line'  a comparison was made and the gauge is not above the line
   //                   'unknown'      cannot be told; `reason` says why in plain words
-  //   notTracking     true only for 'not-tracking'. Note 'unknown' with aboveLine true (gauge feed late or its
-  //                   24-hour history incomplete) is NOT evidence that NOAA is tracking.
+  //   notTracking     true only for 'not-tracking'. Note 'unknown' with aboveLine true (the gauge's 24-hour
+  //                   history incomplete) is NOT evidence that NOAA is tracking.
   //   reason          plain words when code is 'unknown'; else null
   //   issued          NOAA's issue time (null when invalid); issueAgeMinutes: whole minutes from issue to `now`
   //   readingTime     time of the gauge reading compared; gaugeCfs: that reading
-  //   forecastCfs     NOAA's value for readingTime by straight-line interpolation between forecast points no more
-  //                   than 6 hours apart; null outside the path (never invented before its first point)
+  //   compared        true when either case above could be evaluated; false otherwise (then aboveLine is null)
+  //   covered         true / false for the two cases; null when not compared
+  //   forecastCfs     covered only: NOAA's value for readingTime; null in the ahead case and outside the path
   //   difference      gaugeCfs minus forecastCfs (null with forecastCfs)
+  //   first           { t, q } the path's first point (null without a usable forecast)
+  //   top             { t, q } the highest value in the path from the reading's time on, the earliest on a tie
+  //                   (covered: NOAA's value at the reading's time counts; ahead: the whole path)
+  //   aboveTopBy      gaugeCfs minus top.q; aboveTop: that is at least the line
+  //   aboveFirstBy    ahead only: gaugeCfs minus first.q; else null
+  //   basis           what put the gauge above the line: 'at-reading-time' (covered), 'above-highest' or
+  //                   'above-first-and-rising' (ahead); null when not above
   //   threshold       { label, cfs } seasonal number at readingTime; line: 10% of it (WATCH.seasonalFraction)
-  //   aboveLine       difference >= line; null when there is no difference
+  //   aboveLine       see the two cases; null when not compared
   //   riseInProgress  true / false from riverState; null when it is not fresh or its riseStatus is 'unknown'
   //   pathOnlyFalls   forecastOnlyFalls of the usable window from the check time; null without a usable forecast
   function noaaAgainstGauge(river, forecastRows, issued, now) {
-    const blank = { code: 'unknown', notTracking: false, reason: null, issued: null, issueAgeMinutes: null, readingTime: null, gaugeCfs: null, forecastCfs: null, difference: null, threshold: null, line: null, aboveLine: null, riseInProgress: null, pathOnlyFalls: null };
+    const blank = { code: 'unknown', notTracking: false, reason: null, issued: null, issueAgeMinutes: null, readingTime: null, gaugeCfs: null, compared: false, covered: null, forecastCfs: null, difference: null, first: null, top: null, aboveTopBy: null, aboveTop: null, aboveFirstBy: null, basis: null, threshold: null, line: null, aboveLine: null, riseInProgress: null, pathOnlyFalls: null };
     const clean = path(forecastRows), issue = typeof issued === 'number' && Number.isFinite(issued) && Math.abs(issued) <= 8640000000000000 ? new Date(issued).toISOString() : issued;
     const fc = clean && typeof now === 'number' && Number.isFinite(now) ? forecast(clean, issue, now) : null;
     if (!fc?.usable) return { ...blank, reason: fc?.reason || 'NOAA river forecast unavailable', issued: fc?.issued ?? null };
-    const known = { ...blank, issued: fc.issued, issueAgeMinutes: Math.floor((now - fc.issued) / MIN), pathOnlyFalls: forecastOnlyFalls(fc) };
+    const known = { ...blank, issued: fc.issued, issueAgeMinutes: Math.floor((now - fc.issued) / MIN), pathOnlyFalls: forecastOnlyFalls(fc), first: { t: clean[0].t, q: clean[0].q } };
     const reading = river?.available ? river.reading : null;
     if (!reading || typeof reading.t !== 'number' || !Number.isFinite(reading.t) || typeof reading.q !== 'number' || !Number.isFinite(reading.q)) return { ...known, reason: 'No gauge reading is available to compare' };
     const riseInProgress = river.fresh && river.riseStatus !== 'unknown' ? river.riseStatus === 'in-progress' : null;
-    const compared = { ...known, readingTime: reading.t, gaugeCfs: reading.q, riseInProgress };
-    const threshold = thresholdAt(reading.t), expected = interpolateGap(clean, reading.t, 6);
-    if (!expected || !threshold) return { ...compared, threshold, reason: 'The NOAA forecast path does not cover the time of the newest gauge reading' };
-    const difference = reading.q - expected.q, line = threshold.cfs * WATCH.seasonalFraction, aboveLine = difference >= line - EPS;
+    const withReading = { ...known, readingTime: reading.t, gaugeCfs: reading.q, riseInProgress };
+    const threshold = thresholdAt(reading.t), ahead = reading.t < clean[0].t, expected = ahead ? null : interpolateGap(clean, reading.t, 6);
+    if (!threshold || (!ahead && !expected)) return { ...withReading, threshold, reason: 'The NOAA forecast path does not cover the time of the newest gauge reading' };
+    const line = threshold.cfs * WATCH.seasonalFraction;
+    // The highest value from the reading's time on; a strict comparison keeps the earliest on a tie.
+    const candidates = ahead ? clean : [{ t: reading.t, q: expected.q }, ...clean.filter(r => r.t > reading.t)];
+    const top = candidates.reduce((best, r) => r.q > best.q ? r : best), aboveTopBy = reading.q - top.q, aboveTop = aboveTopBy >= line - EPS;
+    const aboveFirstBy = ahead ? reading.q - clean[0].q : null, difference = ahead ? null : reading.q - expected.q;
+    const rising = river.fresh === true && !!river.lastHour && river.lastHour.label === 'rising';
+    const basis = ahead ? (aboveTop ? 'above-highest' : aboveFirstBy >= line - EPS && rising ? 'above-first-and-rising' : null) : difference >= line - EPS ? 'at-reading-time' : null;
+    const aboveLine = basis !== null;
     const code = !aboveLine ? 'within-line' : riseInProgress === true ? 'not-tracking' : riseInProgress === false ? 'above-line' : 'unknown';
-    return { ...compared, code, notTracking: code === 'not-tracking', reason: code === 'unknown' ? 'The gauge is above the NOAA forecast, but whether a rise is in progress cannot be told' : null, forecastCfs: expected.q, difference, threshold, line, aboveLine };
+    return { ...withReading, code, notTracking: code === 'not-tracking', reason: code === 'unknown' ? 'The gauge is above the NOAA forecast, but whether a rise is in progress cannot be told' : null, compared: true, covered: !ahead, forecastCfs: ahead ? null : expected.q, difference, top: { t: top.t, q: top.q }, aboveTopBy, aboveTop, aboveFirstBy, basis, threshold, line, aboveLine };
   }
   // watchWithLastHour(watch, river) -- makes the earlier-forecast comparison's "rising" word follow the River block.
   //   watch  the object surpriseWatch(...) returned (surpriseWatch itself is unchanged: on its own, its
@@ -929,17 +999,23 @@
       dry: { rises: 52, months: 'May to October', medianHours: 6, medianHoursAsComputed: 5.9, middleHalfHours: [3.5, 8], middleHalfHoursAsComputed: [3.4, 8.1], over8h: 13, atLeast16h: 5 },
       source: 'Look-back on 172 Samish rises, 2011 to 2023: hours from the hour the 24-hour rise passed the seasonal number to the highest 15-minute reading of that rise.' },
     // For rises whose highest reading had not yet come at each stage: the further hours to it.
-    wait: { period: '2011 to 2023', stagesHours: [0, 2, 4, 6, 8, 12], risesStillWaiting: [167, 150, 109, 74, 49, 29], medianMoreHours: [5.5, 4, 3.5, 4, 5.8, 7], upperQuartileMoreHours: [9.4, 8, 8.8, 11.9, 12.8, 13.8], typicalWaitHours: [3.5, 7], oneInFourAtLeastHours: 8,
-      source: 'Look-back on 172 Samish rises, 2011 to 2023: for the rises whose highest 15-minute reading had not yet come 0, 2, 4, 6, 8 and 12 hours after the seasonal number was passed, the further hours to that reading (the middle value and the upper quarter at each stage).' },
+    wait: { period: '2011 to 2023', stagesHours: [0, 2, 4, 6, 8, 12], risesStillWaiting: [167, 150, 109, 74, 49, 29], medianMoreHours: [5.5, 4, 3.5, 4, 5.8, 7], lowerQuartileMoreHours: [3.2, 2, 1.5, 1.5, 2, 4], upperQuartileMoreHours: [9.4, 8, 8.8, 11.9, 12.8, 13.8], typicalWaitHours: [3.5, 7], oneInFourAtLeastHours: 8,
+      source: 'Look-back on 172 Samish rises, 2011 to 2023: for the rises whose highest 15-minute reading had not yet come 0, 2, 4, 6, 8 and 12 hours after the seasonal number was passed, the further hours to that reading (the lower quarter, the middle value and the upper quarter at each stage).' },
+    // Every 15-minute reading that was a new high for its rise: how far away the highest reading of the rise then was.
+    afterNewHigh: { readings: 4027, rises: 172, withinHours: 2, withinPercent: 24.9, aboutOneInWithin: 4, atLeastHours: 8, atLeastPercent: 26.6, aboutOneInAtLeast: 4, period: '2011 to 2023',
+      source: 'Look-back on 172 Samish rises, 2011 to 2023: every 15-minute reading, from the seasonal number being passed to the highest reading, that was a new high for its rise (4,027 readings), and the further hours from each to the highest reading of that rise.' },
+    // Rain and a two-hour pause, and the one storm the sentence beside "may have peaked" names.
+    rainPause: { afterMinutes: 120, radarWindowHours: 3, radarAtLeastMm: 0.5, pausesWithRadar: 62, rainingPauses: 23, rainingRoseAgain: 4, dryPauses: 39, dryRoseAgain: 2, storm: '29 September 2026', rainEnded: 'about 2 pm', riverRoseUntil: '9 to 10 pm', highestHourlyCfs: 191, period: '2011 to 2023, and the rise of 29 September 2026',
+      source: 'Look-back on the two-hour pauses of 172 Samish rises, 2011 to 2023, that have a radar reading (62 pauses): rain over the basin in the three hours before the pause against whether the river rose again. And the rise of 29 September 2026: the last hour with rain on the basin radar ended at 2 pm, and the highest hourly flow came at 9 and 10 pm.' },
     // NOAA's river forecast shifted to start at the latest gauge reading, against the forecast as issued.
     aligned: { rises: 66, falseAlertEpisodesAligned: 29, falseAlertEpisodesAsIssued: 38, warned12hEitherWay: 36, leadHours: 12, period: 'October 2020 to September 2026',
       source: 'Look-back at the Samish over every decision time from October 2020 to September 2026 (six water years, 66 rises): the NOAA river forecast read as issued, against the same forecast shifted to start at the latest gauge reading.' },
     // NOAA's river forecast before the dry-season rises.
-    noaaDry: { rises: 32, shown12hAhead: 25, notShown: 7, notShownIncludes: '29 September 2026', leadHours: 12, period: 'May to October rises of 2018 to 2026',
-      source: 'Look-back on the 32 May to October Samish rises of 2018 to 2026: the NOAA river forecast read hour by hour against the seasonal number.' },
+    noaaDry: { rises: 32, shown12hAhead: 25, notShown: 7, notShownIncludes: '29 September 2026', leadHours: 12, period: 'May to October rises of July 2018 to early October 2026',
+      source: 'Look-back on the 32 May to October Samish rises of July 2018 to early October 2026: the NOAA river forecast read hour by hour against the seasonal number.' },
     // The river forecast centre's basin rain forecast in the dry season. NOT the two points shown on the page.
-    rainContext: { thresholdIn: 0.75, windowHours: 24, seasons: 8.46, perSeason: 5, occasions: 45, followed: 23, riseCfs: 100, followedWithinHours: 36, withNoNoaaRise: 26, withNoNoaaRiseFollowed: 7, aboutOneInWithNoNoaaRise: 4, risesNoaaDidNotShow: 7, ofThoseRainForecastAhead: 4, leadHours: 12, aheadYears: '2024 to 2026', aheadIncludes: '29 September 2026', risesWithForecast: 32, risesWithLessRain: 10, period: 'dry seasons of 2018 to 2026',
-      source: 'Look-back over the dry seasons (May to October) of 2018 to 2026: the river forecast centre’s basin-average rain forecast for the next 24 hours, read hour by hour. This is a different rain forecast from the two National Weather Service points shown on this page and has not been checked against them.' }
+    rainContext: { thresholdIn: 0.75, windowHours: 24, seasons: 8.46, perSeason: 5, occasions: 45, followed: 23, riseCfs: 100, followedWithinHours: 36, withNoNoaaRise: 26, withNoNoaaRiseFollowed: 7, aboutOneInWithNoNoaaRise: 4, risesNoaaDidNotShow: 7, ofThoseRainForecastAhead: 4, leadHours: 12, aheadYears: '2024 to 2026', aheadIncludes: '29 September 2026', risesWithForecast: 32, risesWithLessRain: 10, period: 'dry seasons of July 2018 to early October 2026',
+      source: 'Look-back over the dry seasons (May to October) of July 2018 to early October 2026: the river forecast centre’s basin-average rain forecast for the next 24 hours, read hour by hour. This is a different rain forecast from the two National Weather Service points shown on this page and has not been checked against them.' }
   });
   root.SamishData = { H, WATCH, number, time, nwpsSeries, usgs, duration, rain, rainWindow, rainBins, rrmProductId, rrmRain, basinGeometry, gaugePoint, gridPoint, gridCellWithinBasin, radarCapabilities, csvCell, stormRecord, stormCsv, interpolate, atBefore, thresholdAt, recentChange, planningScreen, lineRelation, makeSnapshot, surpriseWatch, forecastRevision, forecast, tides,
     RIVER_RULES, RAIN_RULES, LOOKBACK_RULES, EVIDENCE, riverState, countAnchor, lastHourLabel, forecastOnlyFalls, noaaAgainstGauge, watchWithLastHour, tideRequest, tideState, rainBlockState, suspectZeroRain, drySeasonContext };
