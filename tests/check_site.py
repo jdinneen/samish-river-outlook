@@ -1238,17 +1238,17 @@ with sync_playwright() as p:
              since='12:00 PM PDT', rise=rise_line('175.1', 175, low_at_1am),
              noaa=noaa_line('2:36 PM PDT', '8 hours', '52.2', '10:00 PM PDT', '191', '138.8'), above=above_highest('138.8'), card='Largest relative rise: 175.1 cfs, or 175% of the 100 cfs May–October reference.',
              tide=evening_tide('3 h 34 min')),
-        # 11:20 PM: two hours of readings with no new high, yet the 11:00 PM reading (189 cfs) is 2 cfs above the 8:00 PM
-        # one. The page prints those two facts, with no "may have peaked", no count and no rain sentence.
-        dict(name='1120pm', check=pacific(29, 23, 20), state_code='may-have-peaked', up_on_three=True, flow='189', time='at 11:00 PM PDT',
+        # 11:20 PM: two hours of readings with no new high. The 11:00 PM reading (189 cfs) is 2 cfs above the 8:00 PM
+        # one, but it is 2 cfs DOWN on the hour before, so the page does not print "the river is up": the ordinary
+        # "may have peaked" sentence stands, with its count and the rain sentences beside it.
+        dict(name='1120pm', check=pacific(29, 23, 20), state_code='may-have-peaked', flow='189', time='at 11:00 PM PDT',
              change='Last hour: -2 cfs (about level). About 3 hours: +2 cfs.',
-             state='No new high since 9:00 PM PDT (2 h 0 min of readings), but the river is up 2 cfs on about 3 hours earlier.',
-             high='Highest reading since then: 191 cfs at 9:00 PM PDT.',
+             state='No new high since 9:00 PM PDT (2 h 0 min of readings): the river may have peaked at 191 cfs. ' + PEAK,
              since='12:00 PM PDT', rise=rise_line('173.1', 173, low_at_1am),
              noaa=noaa_line('2:36 PM PDT', '9 hours', '44.2', '11:00 PM PDT', '189', '144.8'), above=above_highest('144.8'), card='Largest relative rise: 173.1 cfs, or 173% of the 100 cfs May–October reference.',
              tide=evening_tide('4 h 34 min')),
-        # 12:20 AM: three hours without a new high and the midnight reading (185 cfs) is below the 9:00 PM one.
-        # "May have peaked", with the count taken from the 2-hour mark.
+        # 12:20 AM: three hours without a new high; the midnight reading (185 cfs) is down on both the hour before and
+        # three hours before. "May have peaked", with the count still taken from the 2-hour mark (11:00 PM).
         dict(name='1220am-next-day', check=pacific(30, 0, 20), state_code='may-have-peaked', flow='185', time='at 12:00 AM PDT',
              change='Last hour: -4 cfs (falling). About 3 hours: -6 cfs.',
              state='No new high since Sep 29, 9:00 PM PDT (3 h 0 min of readings): the river may have peaked at 191 cfs. ' + PEAK,
@@ -1276,7 +1276,7 @@ with sync_playwright() as p:
         shot = f'replay-{order:02d}-{name}'   # numbered so the screenshots sort in time order
         feeds = {'newest': spec['newest']} if 'newest' in spec else {}
         new_high, still_rising = spec['state_code'] == 'new-high', spec['state_code'] == 'new-high' and spec.get('still_rising', True)
-        peak_said = spec['state_code'] == 'may-have-peaked' and not spec.get('up_on_three')   # "may have peaked" is printed
+        peak_said = spec['state_code'] == 'may-have-peaked'                                    # "may have peaked" is printed
         ahead = spec['noaa'].count('starts at') == 1                                           # NOAA's path has not reached the reading
         assert (spec.get('flag', NOT_TRACKING) is None) == ahead, (name, 'no flag is expected exactly where the reading is earlier than NOAA’s first point')
         frame_context, frame, source = open_frame(check, **feeds)
@@ -1296,14 +1296,15 @@ with sync_playwright() as p:
         for ident, text in expected.items():
             assert lines[ident] == text, (name, ident, lines[ident], text)
         frame_lines[name] = lines
-        assert (spec.get('high') is not None) == (spec['state_code'] == 'paused' or spec.get('up_on_three', False)), 'the separate high line is expected only where the state sentence does not name the high'
+        assert (spec.get('high') is not None) == (spec['state_code'] == 'paused'), 'in the replay the separate high line is expected only beside a pause, whose sentence does not name the high'
         assert frame.evaluate('feed => SamishData.riverState(SamishData.usgs(feed, Date.now()), Date.now()).state', source['payload']['usgs']) == spec['state_code'], (name, 'state code')
         # "May have peaked" is never printed before the 11:00 PM reading. "Still rising" needs a new high AND a last
         # hour that meets the "rising" test; any other new high reads "New high".
-        assert ('may have peaked' in outlook_text) == (name == '1220am-next-day') == peak_said, (name, 'may-have-peaked wording')
-        assert (str(EVIDENCE['peak2h']['within12h']) + ' (about 1 in') not in lines['river-state'] or peak_said, (name, 'the 2-hour count is printed only beside "may have peaked"')
-        if spec.get('up_on_three'):
-            assert 'may have peaked' not in outlook_text and str(EVIDENCE['rises']['count']) not in frame.locator('#river-block').inner_text() and 'up 2 cfs on about 3 hours earlier' in lines['river-state'], (name, 'up on three hours: no "may have peaked" and no count')
+        assert ('may have peaked' in outlook_text) == (name in ('1120pm', '1220am-next-day')) == peak_said, (name, 'may-have-peaked wording')
+        assert ((str(EVIDENCE['peak2h']['within12h']) + ' (about 1 in') in lines['river-state']) == peak_said, (name, 'the 2-hour count is printed beside "may have peaked", and only there')
+        # No moment of this rise meets the "up on three hours" form: whenever two hours had passed without a new
+        # high, the last hour was down. (The form is tested on a synthetic gauge further down.)
+        assert 'on about 3 hours earlier' not in outlook_text, (name, 'the "river is up" form is not printed while the last hour is down')
         assert ('Still rising' in outlook_text) == still_rising and ('New high as of' in outlook_text) == (new_high and not still_rising), (name, 'still-rising and new-high wording')
         if name in ('1020pm', '1120pm'):
             assert 'rising' not in lines['river-change'] and 'rising' not in lines['river-state'] and 'rising' not in said(frame, 'watch-title'), (name, 'the river is not called rising after it stopped')
@@ -1608,6 +1609,36 @@ with sync_playwright() as p:
             flat.screenshot(path=str(out / 'state-may-have-peaked-count-past-24-hours-desktop-1440.png'))
         flat_context.close()
 
+    # Two hours without a new high while the river is up on about three hours earlier. A SYNTHETIC hourly gauge (nothing
+    # real): quiet at 50 cfs, 150 cfs three hours back, a 200 cfs high two hours back (10:00 AM), then `tail` as
+    # (minutes back, cfs). "But the river is up" is printed only when the last-hour change is there to read and is not
+    # negative; with the last hour down, or unreadable, the ordinary "may have peaked" sentence stands with its count
+    # and the rain sentences.
+    newest_reading = plateau_check - timedelta(minutes=20)
+    two_hours_after_a_high = lambda tail: ([(newest_reading - timedelta(hours=back), 50) for back in range(80, 3, -1)] + [(newest_reading - timedelta(hours=3), 150), (newest_reading - timedelta(hours=2), 200)]
+                                           + [(newest_reading - timedelta(minutes=minutes), flow_cfs) for minutes, flow_cfs in tail])
+    river_is_up = lambda cfs: f'No new high since 10:00 AM PDT (2 h 0 min of readings), but the river is up {cfs} cfs on about 3 hours earlier.'
+    may_have_peaked_at_200 = 'No new high since 10:00 AM PDT (2 h 0 min of readings): the river may have peaked at 200 cfs. ' + PEAK
+    for label, tail, change, expected_state in [
+            ('last hour level', [(60, 199), (0, 199)], 'Last hour: 0 cfs (about level). About 3 hours: +49 cfs.', river_is_up('49')),
+            ('last hour up 1 cfs', [(60, 198), (0, 199)], 'Last hour: +1 cfs (about level). About 3 hours: +49 cfs.', river_is_up('49')),
+            ('last hour down 1 cfs', [(60, 199), (0, 198)], 'Last hour: -1 cfs (about level). About 3 hours: +48 cfs.', may_have_peaked_at_200),
+            ('last hour falling', [(60, 199), (0, 195)], 'Last hour: -4 cfs (falling). About 3 hours: +45 cfs.', may_have_peaked_at_200),
+            ('no last-hour change to read', [(90, 199), (30, 199), (0, 199)], 'Last hour: unavailable. About 3 hours: +49 cfs.', may_have_peaked_at_200)]:
+        up_context, up_page, up_source = open_frame(plateau_check, feeds_payload=synthetic_gauge_payload(plateau_check, two_hours_after_a_high(tail)))
+        lines = river_lines(up_page)
+        up_form = expected_state != may_have_peaked_at_200
+        assert up_page.evaluate('feed => SamishData.riverState(SamishData.usgs(feed, Date.now()), Date.now()).state', up_source['payload']['usgs']) == 'may-have-peaked', (label, 'two hours since the high and within 5% of it')
+        assert lines['river-change'] == change and lines['river-state'] == expected_state, (label, lines['river-change'], lines['river-state'])
+        # The "river is up" sentence does not name the high, so the high gets its own line; it carries no count and no rain sentence.
+        assert lines['river-high'] == ('Highest reading since then: 200 cfs at 10:00 AM PDT.' if up_form else None) and lines['river-rain-note'] == (None if up_form else RAIN_BESIDE_PEAK), (label, lines)
+        block_text = up_page.locator('#river-block').inner_text()
+        assert ('may have peaked' in block_text) == (not up_form) and (str(EVIDENCE['rises']['count']) in block_text) == (not up_form) and banned_words(up_page.locator('#outlook').inner_text()) == [], label
+        if label == 'last hour level':
+            up_page.screenshot(path=str(out / 'state-no-new-high-but-up-on-three-hours-desktop-1440.png'))
+            axe_runs += audit_page(up_page, 'no-new-high-but-up-on-three-hours')
+        up_context.close()
+
     # ---- Climbing again below an earlier top (SYNTHETIC winter storm at the 400 cfs number; nothing real) ----
     # A first surge to 1,400 cfs, a fall to 820 cfs, then a slow second climb of 15 cfs an hour: under the 2% "rising"
     # test, so without the climb-back rule the page said "falling" with a count while the river rose for 12 hours.
@@ -1884,7 +1915,7 @@ with sync_playwright() as p:
                     'first reading of the last 48 hours', 'remembered for 48 hours of readings', 'the page then says “since at or before”', 'its readings do not reach back to where that rise began',
                     'strictly higher than every earlier reading of this rise. An equal reading is not a new high.', 'otherwise the page says “New high”',
                     'a higher reading from the last 48 hours is held from before this rise began, the new-high line names it',
-                    'After 120 minutes with no new high, while the newest reading is higher than the one about three hours earlier, the page prints those two facts instead of “may have peaked”, with no count',
+                    'After 120 minutes with no new high, while the newest reading is higher than the one about three hours earlier and the last-hour change is not negative, the page prints those two facts instead of “may have peaked”, with no count',
                     '60 minutes of readings with no new high is called a pause; 120 minutes or more is “may have peaked”', 'at least 5% below the high is “falling”',
                     'above the lowest reading since the high by at least 5% of the high, the about-three-hour change is positive and the last-hour change is not negative',
                     'the count beside “may have peaked” from the 2-hour mark', 'more than 24 hours of readings past that point',

@@ -113,8 +113,9 @@ Meaning and limits of the new blocks:
   “falling”. It is not printed once the newest reading is more than 24 hours of
   readings past that point, the longest span the count covers. After 120 minutes
   with no new high, while the newest reading is higher than the one about three
-  hours earlier, the page prints those two facts instead of “may have peaked”,
-  with no count.
+  hours earlier and the last-hour change is not negative, the page prints those
+  two facts instead of “may have peaked”, with no count. With the last hour
+  down, the “may have peaked” sentence and its count stand.
 - Those counts are read from one object, `SamishData.EVIDENCE` in `data.js`: 172
   Samish rises of 2011 to 2023 at 15-minute readings, and three look-backs on
   forecasts (two of them cover July 2018 to early October 2026). Each entry names its period and source. Each is a look-back on past
