@@ -826,6 +826,9 @@
   //   covered  the reading lies inside the path: NOAA's value for the reading's time (straight line between
   //            forecast points no more than 6 hours apart) is set against the gauge. Above the line when the
   //            gauge is higher by at least the line.
+  //   either   Above the line, too, when the gauge is above the HIGHEST value in NOAA's forecast from the reading's
+  //            time on by ANY amount while the river's last-hour label is 'rising': a rising river that NOAA's
+  //            forecast never reaches is above it, however small the margin.
   //   ahead    the reading is earlier than the path's first point: no value is invented for the reading's time.
   //            Above the line when the gauge is above the HIGHEST value anywhere in the path by the line, OR
   //            above the path's FIRST value by the line while the river's last-hour label is 'rising'.
@@ -849,7 +852,8 @@
   //   aboveTopBy      gaugeCfs minus top.q; aboveTop: that is at least the line
   //   aboveFirstBy    ahead only: gaugeCfs minus first.q; else null
   //   basis           what put the gauge above the line: 'at-reading-time' (covered), 'above-highest' or
-  //                   'above-first-and-rising' (ahead); null when not above
+  //                   'above-first-and-rising' (ahead), or 'above-highest-and-rising' (either case: above the
+  //                   highest value by less than the line while the last hour is 'rising'); null when not above
   //   threshold       { label, cfs } seasonal number at readingTime; line: 10% of it (WATCH.seasonalFraction)
   //   aboveLine       see the two cases; null when not compared
   //   riseInProgress  true / false from riverState; null when it is not fresh or its riseStatus is 'unknown'
@@ -872,7 +876,9 @@
     const top = candidates.reduce((best, r) => r.q > best.q ? r : best), aboveTopBy = reading.q - top.q, aboveTop = aboveTopBy >= line - EPS;
     const aboveFirstBy = ahead ? reading.q - clean[0].q : null, difference = ahead ? null : reading.q - expected.q;
     const rising = river.fresh === true && !!river.lastHour && river.lastHour.label === 'rising';
-    const basis = ahead ? (aboveTop ? 'above-highest' : aboveFirstBy >= line - EPS && rising ? 'above-first-and-rising' : null) : difference >= line - EPS ? 'at-reading-time' : null;
+    const aboveTopAndRising = aboveTopBy > EPS && rising;
+    const basis = ahead ? (aboveTop ? 'above-highest' : aboveTopAndRising ? 'above-highest-and-rising' : aboveFirstBy >= line - EPS && rising ? 'above-first-and-rising' : null)
+      : difference >= line - EPS ? 'at-reading-time' : aboveTopAndRising ? 'above-highest-and-rising' : null;
     const aboveLine = basis !== null;
     const code = !aboveLine ? 'within-line' : riseInProgress === true ? 'not-tracking' : riseInProgress === false ? 'above-line' : 'unknown';
     return { ...withReading, code, notTracking: code === 'not-tracking', reason: code === 'unknown' ? 'The gauge is above the NOAA forecast, but whether a rise is in progress cannot be told' : null, compared: true, covered: !ahead, forecastCfs: ahead ? null : expected.q, difference, top: { t: top.t, q: top.q }, aboveTopBy, aboveTop, aboveFirstBy, basis, threshold, line, aboveLine };

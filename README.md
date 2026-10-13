@@ -37,9 +37,11 @@ What changed:
   the time of the newest gauge reading, NOAA’s value for that time is set against
   the reading. Until it does, the reading is set against the highest value
   anywhere in the path, or against the path’s first value while the last-hour
-  change is “rising”. When the gauge is higher by at least 10% of the seasonal
-  number while a measured rise is in progress, the page says the forecast is not
-  tracking the rise. This uses no saved history, so it works on a first visit.
+  change is “rising”. The gauge is above the line when it is higher by at least
+  10% of the seasonal number, and also whenever it is above the highest value in
+  NOAA’s forecast by any amount while the last-hour change is “rising”. With a
+  measured rise in progress the page then says the forecast is not tracking the
+  rise. This uses no saved history, so it works on a first visit.
 - NOAA’s peak-time words (a forecast-high time, or “forecast to fall”) appear
   only when that comparison was made and the gauge is not above the line.
   Otherwise the page says no peak time is read, either because the gauge is above
@@ -112,7 +114,8 @@ Meaning and limits of the new blocks:
   dated 4 September 2026, read 13 October 2026). How the Department sets the
   starting flow, and its clock at a season boundary, are not published there.
 - The measured rise is this page’s arithmetic, not the Department of Health’s
-  decision. No fitted model supplies any value on the page.
+  decision, and every line that says the seasonal number was passed ends by
+  saying so. No fitted model supplies any value on the page.
 
 ## Version 6
 
@@ -227,7 +230,7 @@ already holds, sends no request, and an injected legend or layer failure never
 reaches the page (the version 6 suite failed that way in this environment). The
 version 7 replay fixes the device clock with Playwright’s clock interface.
 
-Version 7 adds 295 numerical contracts for the river, forecast, tide, rain and
+Version 7 adds 303 numerical contracts for the river, forecast, tide, rain and
 look-back rules, and a replay of the rise of 29 September 2026 through the page
 with the clock fixed: ten moments from 12:20 PM to 8:20 AM the next day, at
 desktop and phone sizes, with every River, NOAA and Tide sentence asserted
