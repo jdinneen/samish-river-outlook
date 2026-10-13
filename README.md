@@ -27,9 +27,10 @@ What changed:
   the last hour and over about three hours; the rise above the lowest reading of
   the past 24 hours as a share of the seasonal number; and, for 48 hours of
   readings after that rise passes the number, one sentence saying where the rise
-  stands. A reading more than 90 minutes old, or a hole of more than 60 minutes
-  in the last hour, gives “Cannot tell whether the river is rising” and no change
-  figure.
+  stands. “Still rising” is said only for a new high whose last-hour change is
+  “rising”; any other new high is called “New high”. A reading more than 90
+  minutes old, or a hole of more than 60 minutes in the last hour, gives “Cannot
+  tell whether the river is rising” and no change figure.
 - **NOAA block.** The current National Oceanic and Atmospheric Administration
   (NOAA) forecast issue is set against the gauge at the time of the newest
   reading. When the gauge is higher by at least 10% of the seasonal number while
@@ -42,7 +43,8 @@ What changed:
   meets the same test as the River block.
 - The NOAA-based rise card is titled “What NOAA’s forecast adds” and never says
   “below the numeric line” while the measured rise has passed the number in the
-  last 48 hours of readings.
+  last 48 hours of readings. It is withheld, with the reason, whenever the River
+  block cannot tell, so no rise is computed from a reading the block has refused.
 - A six-hour rain block with no value is drawn as a hatched “no data” column
   instead of an empty space that looks like zero. One observed-rain gauge at
   0.00 inch for 24 hours while both others report 0.25 inch or more is marked
@@ -66,7 +68,10 @@ Meaning and limits of the new blocks:
   rise has passed, and the page prints no clock time and no countdown for it.
   “Paused” (60 minutes of readings with no new high), “may have peaked” (120
   minutes) and “falling” (5% below the high) each come with the count of past
-  rises that went higher again.
+  rises that went higher again. A count is taken from a stated point: the 2-hour
+  mark for “may have peaked”, and the first reading 5% below the high for
+  “falling”. It is not printed once the newest reading is more than 24 hours of
+  readings past that point, the longest span the count covers.
 - Those counts are read from one object, `SamishData.EVIDENCE` in `data.js`: 172
   Samish rises of 2011 to 2023 at 15-minute readings, and three look-backs on
   forecasts. Each entry names its period and source. Each is a look-back on past
@@ -191,14 +196,15 @@ already holds, sends no request, and an injected legend or layer failure never
 reaches the page (the version 6 suite failed that way in this environment). The
 version 7 replay fixes the device clock with Playwright’s clock interface.
 
-Version 7 adds 234 numerical contracts for the river, forecast, tide, rain and
+Version 7 adds 254 numerical contracts for the river, forecast, tide, rain and
 look-back rules, and a replay of the rise of 29 September 2026 through the page
-with the clock fixed: eight moments from 12:20 PM to 8:20 AM the next day, at
+with the clock fixed: nine moments from 12:20 PM to 8:20 AM the next day, at
 desktop and phone sizes, with every River, NOAA and Tide sentence asserted
 exactly. The 15-minute gauge readings and the tide predictions in that replay
 are real; NOAA’s forecast path, the rain and the radar in it are invented and
 are marked so in the test file. Further checks cover a stalled feed and a hole
-in the readings, a first visit, a rise older than the readings compared, the
+in the readings, a first visit, a rise older than the readings compared, a
+count past its 24 hours (on invented and synthetic readings, marked so), the
 phone windows 390 by 664 and 375 by 548 with minimum type sizes, a missing rain
 block against a zero one, every look-back count on the page against the
 evidence object, words that must not appear on the Outlook tab, and what a

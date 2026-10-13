@@ -881,6 +881,31 @@
     const month = pacificMonth(t);
     return month === null ? null : RAIN_RULES.dryMonths.includes(month);
   }
+  // LOOKBACK_RULES (frozen). countHorizonHours: the longest span the "falling" and "may have peaked" look-back
+  // counts cover (their "within 24 hours" figure). A count is not printed once the newest reading is more than
+  // this many hours of readings past the point the count is taken from.
+  const LOOKBACK_RULES = Object.freeze({ countHorizonHours: 24 });
+  // countAnchor(rows, river) -- the point a look-back count is counted from, in reading time. It changes no rule
+  // of riverState; it only says where the count printed beside a state starts and whether it still applies.
+  //   rows   the observed readings handed to riverState
+  //   river  the object riverState(rows, now) returned
+  // Returns null unless river.state is 'falling' or 'may-have-peaked' (so also null when not fresh); otherwise
+  // { state, t, q, minutesSince, withinHorizon }:
+  //   state 'falling'          t, q: the EARLIEST reading after river.high that was at least fallingFraction (5%)
+  //                            below it (the newest reading itself when it is the first that far below)
+  //   state 'may-have-peaked'  t: the 2-hour mark, river.high.t plus peakMinutes (a moment, not necessarily a
+  //                            reading); q is null
+  //   minutesSince             whole minutes of READING time from t to the newest reading
+  //   withinHorizon            t is at most countHorizonHours before the newest reading (exactly 24 hours is inside)
+  function countAnchor(rows, river) {
+    if (!river || river.fresh !== true || !river.high || !river.reading || (river.state !== 'falling' && river.state !== 'may-have-peaked')) return null;
+    const newest = river.reading.t, horizon = LOOKBACK_RULES.countHorizonHours * H;
+    const anchor = (t, q) => ({ state: river.state, t, q, minutesSince: Math.floor((newest - t) / MIN), withinHorizon: newest - t <= horizon });
+    if (river.state === 'may-have-peaked') return anchor(river.high.t + RIVER_RULES.peakMinutes * MIN, null);
+    const clean = gaugeReadings(rows, newest);
+    const first = clean ? clean.find(r => r.t > river.high.t && river.high.q - r.q >= RIVER_RULES.fallingFraction * river.high.q - EPS) : null;
+    return first ? anchor(first.t, first.q) : null;
+  }
   // EVIDENCE (deeply frozen). Every count the page prints about past rises is read from here; nothing is
   // typed into a sentence by hand. Each entry carries its numbers, its period and a `source` in plain words.
   // Every entry is a look-back on past years, not a forecast: print EVIDENCE.caveat beside any of them.
@@ -917,5 +942,5 @@
       source: 'Look-back over the dry seasons (May to October) of 2018 to 2026: the river forecast centre’s basin-average rain forecast for the next 24 hours, read hour by hour. This is a different rain forecast from the two National Weather Service points shown on this page and has not been checked against them.' }
   });
   root.SamishData = { H, WATCH, number, time, nwpsSeries, usgs, duration, rain, rainWindow, rainBins, rrmProductId, rrmRain, basinGeometry, gaugePoint, gridPoint, gridCellWithinBasin, radarCapabilities, csvCell, stormRecord, stormCsv, interpolate, atBefore, thresholdAt, recentChange, planningScreen, lineRelation, makeSnapshot, surpriseWatch, forecastRevision, forecast, tides,
-    RIVER_RULES, RAIN_RULES, EVIDENCE, riverState, lastHourLabel, forecastOnlyFalls, noaaAgainstGauge, watchWithLastHour, tideRequest, tideState, rainBlockState, suspectZeroRain, drySeasonContext };
+    RIVER_RULES, RAIN_RULES, LOOKBACK_RULES, EVIDENCE, riverState, countAnchor, lastHourLabel, forecastOnlyFalls, noaaAgainstGauge, watchWithLastHour, tideRequest, tideState, rainBlockState, suspectZeroRain, drySeasonContext };
 })(globalThis);
