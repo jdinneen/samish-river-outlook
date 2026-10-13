@@ -6,8 +6,77 @@ Buildless HTML, CSS and JavaScript. Each browser requests public river, forecast
 rain, radar, gauge-upstream drainage-area and tide sources directly. There is no runtime package,
 tracking, account, backend, automated alert or background monitor.
 
-The source contains published version 6. `version.json` is the machine-readable
-receipt that binds the public release to its asset commit and file hashes.
+This source is version 7. `version.json` is the machine-readable receipt that
+binds a public release to its asset commit and file hashes. It is written when a
+version is published, so it names the release that is live, which can be older
+than this source.
+
+## Version 7
+
+Version 7 puts what the gauge measured first and stops the page from saying more
+than it knows. A review of version 6 against the Samish rise of 29 September 2026
+found that the page said “still rising” after the river had stopped, printed no
+time beside the river reading, had forgotten by the next morning that the
+seasonal number had been passed, and could not flag a forecast that was missing
+the rise unless the same device had been open hours earlier.
+
+What changed:
+
+- **River block**, first on the page. The flow in the largest type on the page
+  with the reading’s Pacific clock time and its age in minutes; the change over
+  the last hour and over about three hours; the rise above the lowest reading of
+  the past 24 hours as a share of the seasonal number; and, for 48 hours of
+  readings after that rise passes the number, one sentence saying where the rise
+  stands. A reading more than 90 minutes old, or a hole of more than 60 minutes
+  in the last hour, gives “Cannot tell whether the river is rising” and no change
+  figure.
+- **NOAA block.** The current National Oceanic and Atmospheric Administration
+  (NOAA) forecast issue is set against the gauge at the time of the newest
+  reading. When the gauge is higher by at least 10% of the seasonal number while
+  a measured rise is in progress, the page says the forecast is not tracking the
+  rise and reads no peak time from it. This uses no saved history, so it works on
+  a first visit.
+- **Tide block.** The last Bellingham high or low stays on screen after it
+  passes, with the direction and the next two.
+- The earlier-forecast comparison says “rising” only when the last-hour change
+  meets the same test as the River block.
+- The NOAA-based rise card is titled “What NOAA’s forecast adds” and never says
+  “below the numeric line” while the measured rise has passed the number in the
+  last 48 hours of readings.
+- A six-hour rain block with no value is drawn as a hatched “no data” column
+  instead of an empty space that looks like zero. One observed-rain gauge at
+  0.00 inch for 24 hours while both others report 0.25 inch or more is marked
+  suspect.
+- A Research section dated 13 October 2026 gives the look-back counts the page
+  quotes. From May to October the rain card carries one paragraph of context
+  about heavy forecast rain. It is context, not an alert.
+- The chart axis carries Pacific clock times.
+- An unused data file left over from an earlier version is no longer published,
+  and the page no longer names the grower whose account prompted these changes.
+
+Meaning and limits of the new blocks:
+
+- Every duration in the River block is counted between gauge reading time
+  stamps, never against the device clock. The device’s check time is used only
+  for the age of the newest reading.
+- A new high is any reading strictly higher than every earlier reading of the
+  rise; an equal reading is not one. The last-hour change is called “rising”
+  only at +2 cubic feet per second (cfs) and +2% or more.
+- The sentences describe readings already taken. No sentence says the top of a
+  rise has passed, and the page prints no clock time and no countdown for it.
+  “Paused” (60 minutes of readings with no new high), “may have peaked” (120
+  minutes) and “falling” (5% below the high) each come with the count of past
+  rises that went higher again.
+- Those counts are read from one object, `SamishData.EVIDENCE` in `data.js`: 172
+  Samish rises of 2011 to 2023 at 15-minute readings, and three look-backs on
+  forecasts. Each entry names its period and source. Each is a look-back on past
+  years, not a forecast, and none is a chance for the next rise. The display
+  rules are in `SamishData.RIVER_RULES`; the Sources tab prints them.
+- The dry-season rain paragraph is counted on a different rain forecast from the
+  two points the page shows and has not been checked against them. The page
+  computes no rain rule, colour or percentage.
+- The measured rise is this page’s arithmetic, not the Department of Health’s
+  decision. No fitted model supplies any value on the page.
 
 ## Version 6
 
@@ -45,7 +114,8 @@ during a storm:
 
 - U.S. Geological Survey (USGS) river measurements are provisional. Direct USGS
   values take precedence at matching timestamps; NOAA’s gauge copy is a fallback.
-  A reading older than two hours is labeled stale.
+  A reading older than 90 minutes is shown with its time and age and no
+  direction (two hours in version 6).
 - NOAA forecasts are shown without alignment to the latest gauge. An issue older
   than 48 hours, an unsupported gap or expired coverage withholds the forecast.
   The chart never extrapolates. A forecast high is not a confirmed crest or a
@@ -82,7 +152,8 @@ during a storm:
   regulatory boundary. It gates whether each rain point can be displayed but does
   not change any precipitation amount.
 - Tide extrema are NOAA predictions in feet relative to mean lower low water at
-  Bellingham, not Samish Bay water levels or access clearance.
+  Bellingham, not Samish Bay water levels or access clearance. The request
+  starts 24 to 48 hours back so the high or low that just passed is in hand.
 - The page attempts automatic refresh only while it is open, visible and the device
   is awake. It sends no notification and guarantees no background monitoring.
 - A failed source clears that source’s displayed values and cannot become a
@@ -91,11 +162,9 @@ during a storm:
   that browser profile, can be exported or deleted, and are not sent anywhere. On
   the next save, records older than 90 days are removed and only the newest 500 are kept.
 - Historical research summaries are a fixed October 11, 2026 snapshot checked
-  against their C1/C2 result records. Public-feed refreshes do not update them.
+  against their C1/C2 result records, with the look-back on past rises added on
+  13 October 2026. Public-feed refreshes do not update them.
   No experimental model supplies current values on this page.
-
-`backtest.js` is an unchanged historical asset from the preceding public version.
-The current page neither loads it nor uses it to calculate a displayed value.
 
 ## Browser checks
 
@@ -103,15 +172,39 @@ Use an isolated quality-assurance environment with `playwright==1.63.0` and its
 Chromium browser. The website itself requires no installation or build.
 
 ```sh
-python tests/check_site.py
+python -m venv qa_env
+qa_env/bin/python -m pip install playwright==1.63.0      # qa_env\Scripts\python on Windows
+qa_env/bin/python -m playwright install chromium
+AXE_PATH=/path/to/axe.min.js REQUIRE_AXE=1 SAMISH_SCREENSHOT_DIR=/path/to/screenshots \
+  qa_env/bin/python tests/check_site.py
 ```
 
 The test starts and stops its own loopback-only server and intercepts external
 requests with deterministic fixtures. An explicit local URL is also accepted.
 For the required accessibility pass, set `AXE_PATH` to an axe-core 4.13.0 browser
-bundle and `REQUIRE_AXE=1`.
+bundle and `REQUIRE_AXE=1`. `SAMISH_SCREENSHOT_DIR` is optional; without it the
+screenshots go to a temporary folder.
 
-The suite covers 143 numerical contracts, including Pacific-time seasonal
+Harness notes. The synthetic radar and legend images are served with
+`Cache-Control: no-store`: without it this Chromium build reuses an image it
+already holds, sends no request, and an injected legend or layer failure never
+reaches the page (the version 6 suite failed that way in this environment). The
+version 7 replay fixes the device clock with Playwright’s clock interface.
+
+Version 7 adds 234 numerical contracts for the river, forecast, tide, rain and
+look-back rules, and a replay of the rise of 29 September 2026 through the page
+with the clock fixed: eight moments from 12:20 PM to 8:20 AM the next day, at
+desktop and phone sizes, with every River, NOAA and Tide sentence asserted
+exactly. The 15-minute gauge readings and the tide predictions in that replay
+are real; NOAA’s forecast path, the rain and the radar in it are invented and
+are marked so in the test file. Further checks cover a stalled feed and a hole
+in the readings, a first visit, a rise older than the readings compared, the
+phone windows 390 by 664 and 375 by 548 with minimum type sizes, a missing rain
+block against a zero one, every look-back count on the page against the
+evidence object, words that must not appear on the Outlook tab, and what a
+screen reader is told when the state changes.
+
+The version 6 suite covered 143 numerical contracts, including Pacific-time seasonal
 boundaries; strict river-history and forecast support; first-capture immutability;
 six-hour rain mass and missing coverage; Seattle rain-report zero, missing,
 monotonic-window, age, index/payload-clock and exact-row identity handling; radar

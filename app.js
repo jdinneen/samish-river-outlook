@@ -14,6 +14,31 @@
     const value = Object.fromEntries(parts.map(p => [p.type, p.value]));
     return value.year + value.month + value.day;
   };
+  // Version 7 wording helpers. Every count in a sentence is read from D.EVIDENCE or D.RIVER_RULES; none is typed here.
+  const E = D.EVIDENCE, RULES = D.RIVER_RULES;
+  const clockFmt = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+  // A Pacific clock time with its zone. The date is added whenever the Pacific day differs from the check time's day.
+  const clock = (t, ref) => t === null || t === undefined ? 'Unavailable' : pacificDay(t) === pacificDay(ref) ? clockFmt.format(t) : fmt.format(t);
+  const plural = (n, word) => num(n) + ' ' + word + (n === 1 ? '' : 's');
+  const hoursMinutes = minutes => Math.floor(minutes / 60) + ' h ' + (minutes % 60) + ' min';
+  const elapsed = minutes => minutes < 60 ? plural(minutes, 'minute') : hoursMinutes(minutes);
+  const issueAge = minutes => minutes < 60 ? plural(minutes, 'minute') : plural(Math.round(minutes / 60), 'hour');
+  const halves = n => Number.isInteger(n) ? String(n) : Number.isInteger(n * 2) ? (Math.floor(n) || '') + '½' : num(n);
+  const percent = fraction => num(Math.round(fraction * 1000) / 10);
+  const smallWord = n => ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'][n] ?? String(n);
+  const within = hours => hours === 24 ? 'a day' : hours === 36 ? 'a day and a half' : hours + ' hours';
+  const show = (id, text) => { const el = $(id); el.hidden = !text; el.textContent = text || ''; };
+  const SAY = Object.freeze({
+    wait: () => 'However long the river has already been rising, the typical wait to the top in past rises was still ' + halves(E.wait.typicalWaitHours[0]) + ' to ' + halves(E.wait.typicalWaitHours[1]) + ' hours, and one rise in four needed ' + halves(E.wait.oneInFourAtLeastHours) + ' hours or more. A long rise is not due to stop.',
+    pause: () => 'A pause is not a peak: after a ' + (E.pause.afterMinutes === 60 ? 'one-hour' : E.pause.afterMinutes + '-minute') + ' pause, ' + E.pause.higherAgain + ' of ' + E.pause.rises + ' past rises went higher again within ' + within(E.pause.withinHours) + ', ' + E.pause.higherByMoreThan5Percent + ' of them by more than 5%.',
+    peak: () => 'Of ' + E.peak2h.rises + ' past rises that went ' + num(E.peak2h.afterMinutes / 60) + ' hours without a new high, the river later climbed more than 5% above that high within 12 hours in ' + E.peak2h.within12h + ' (about 1 in ' + E.peak2h.aboutOneIn12h + ') and within 24 hours in ' + E.peak2h.within24h + ' (about 1 in ' + E.peak2h.aboutOneIn24h + ').',
+    falling: () => 'Of ' + E.falling.rises + ' past rises that reached this point, the river later climbed more than 5% above that high within 12 hours in ' + E.falling.within12h + ' (about 1 in ' + E.falling.aboutOneIn12h + ') and within 24 hours in ' + E.falling.within24h + ' (about 1 in ' + E.falling.aboutOneIn24h + ').',
+    noaaDry: () => 'NOAA’s river forecast, read hour by hour, showed a closure-size rise ' + E.noaaDry.leadHours + ' or more hours ahead for ' + E.noaaDry.shown12hAhead + ' of ' + E.noaaDry.rises + ' ' + E.noaaDry.period + ', and not for ' + E.noaaDry.notShown + ', among them ' + E.noaaDry.notShownIncludes + '.',
+    rainContext: () => { const c = E.rainContext; return 'In a look-back over the ' + c.period + ', the river forecast centre’s rain forecast for this basin reached ' + c.thresholdIn + ' inch or more in ' + c.windowHours + ' hours about ' + c.perSeason + ' times a season. About half of those times (' + c.followed + ' of ' + c.occasions + ') the river then rose by ' + c.riseCfs + ' cubic feet per second or more within ' + within(c.followedWithinHours) + '. When NOAA’s river forecast showed no such rise and the rain forecast was that high, a rise followed about 1 time in ' + c.aboutOneInWithNoNoaaRise + ' (' + c.withNoNoaaRiseFollowed + ' of ' + c.withNoNoaaRise + '). Rain that high was in the forecast ' + c.leadHours + ' or more hours ahead of ' + c.ofThoseRainForecastAhead + ' of the ' + c.risesNoaaDidNotShow + ' dry-season rises that NOAA’s river forecast did not show, all ' + smallWord(c.ofThoseRainForecastAhead) + ' in ' + c.aheadYears + ', including ' + c.aheadIncludes + '. Less rain than this is not an all-clear: ' + c.risesWithLessRain + ' of ' + c.risesWithForecast + ' rises came with less. These counts are for a different rain forecast from the two points shown here and have not been checked against them.'; }
+  });
+  // Words only; shown beside the "paused" and "may have peaked" sentences. It carries no count from D.EVIDENCE.
+  const RAIN_BESIDE_PAUSE = 'If rain is still falling over the basin on radar, a pause is less likely to be the peak. Rain stopping does not mean the river has peaked: on 29 September 2026 the rain ended about 2 pm and the river kept rising until 9 to 10 pm.';
+  const NO_PEAK_TIME = 'No peak time is read from NOAA’s forecast while the gauge is above it.';
   const SNAPSHOT_KEY = 'samish-river-outlook.forecast-snapshots.v1';
   const STORM_LOG_KEY = 'samish-river-outlook.storm-checks.v1';
   const RADAR_PAUSE_KEY = 'samish-river-outlook.radar-paused.v1';
@@ -203,15 +228,16 @@
     busy = true; $('refresh').disabled = true; $('main').setAttribute('aria-busy', 'true');
     put('update-status', 'Checking the latest public data… Existing readings remain dated until the check finishes.');
     try {
-    const requestTime = Date.now();
-    sources[4].url = 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&station=9449211&begin_date=' + pacificDay(requestTime) + '&range=168&datum=MLLW&units=english&time_zone=gmt&interval=hilo&format=json&application=samish_outlook';
+    const requestTime = Date.now(), tideWindow = D.tideRequest(requestTime);
+    // The request starts 24 to 48 hours back so the high or low that just passed is still in hand.
+    sources[4].url = tideWindow ? 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&station=9449211&begin_date=' + tideWindow.beginDate + '&range=' + tideWindow.rangeHours + '&datum=MLLW&units=english&time_zone=gmt&interval=hilo&format=json&application=samish_outlook' : '';
     const [coreFeeds, rrmFeed, basinFeed] = await Promise.all([Promise.all(sources.map(fetchFeed)), fetchLatestRrm(requestTime), fetchBasinOnce()]), now = Date.now();
     // Each series is parsed independently: a malformed forecast must not erase a valid gauge.
-    const river = coreFeeds[0], gaugeCopy = { ...river }, observations = parse(gaugeCopy, d => D.nwpsSeries(d.observed, now, true)) || [];
+    const riverFeed = coreFeeds[0], gaugeCopy = { ...riverFeed }, observations = parse(gaugeCopy, d => D.nwpsSeries(d.observed, now, true)) || [];
     let rawForecast = [], issue = null;
-    if (!river.error) {
-      try { rawForecast = D.nwpsSeries(river.data.forecast, now, false); issue = river.data.forecast.issuedTime; }
-      catch (e) { river.error = 'Forecast: ' + e.message; }
+    if (!riverFeed.error) {
+      try { rawForecast = D.nwpsSeries(riverFeed.data.forecast, now, false); issue = riverFeed.data.forecast.issuedTime; }
+      catch (e) { riverFeed.error = 'Forecast: ' + e.message; }
     }
     const direct = parse(coreFeeds[1], d => D.usgs(d, now)) || [];
     const gaugePoint = coreFeeds[1].error ? null : D.gaugePoint(coreFeeds[1].data);
@@ -230,59 +256,66 @@
       }
     });
     const observedRain = parse(rrmFeed, d => D.rrmRain(d, now, rrmFeed.selectedIssue));
-    const allTides = (parse(coreFeeds[4], D.tides) || []).filter(r => r.t >= now);
-    if (!coreFeeds[4].error && !allTides.length) coreFeeds[4].error = 'No upcoming high or low tides';
-    const latest = merged.at(-1), change3 = D.recentChange(merged, latest, 3, now);
+    // Unfiltered highs and lows go to tideState, which keeps the last one after it passes.
+    const tideRows = parse(coreFeeds[4], D.tides), tide = D.tideState(tideRows, now);
+    if (!coreFeeds[4].error && !tide.available) coreFeeds[4].error = tide.reason;
+    // The measured River block reads the gauge only; NOAA's current issue is then set against it.
+    const river = D.riverState(merged, now), noaa = D.noaaAgainstGauge(river, rawForecast, issue, now);
+    const latest = merged.at(-1), three = river.threeHour;
     const screen = fc.usable ? D.planningScreen(merged, rawForecast, now) : { usable: false, reason: 'A current usable NOAA forecast is required', alignedRows: [] };
     const initialHistory = readHistory();
-    let watch = D.surpriseWatch({ t: latest?.t, q: latest?.q, change3: change3?.change, span3: change3?.spanHours, fresh: !!latest && now - latest.t <= 2 * H }, initialHistory.snapshots, initialHistory.status);
+    // The earlier-forecast comparison keeps its own rule; its "rising" word is then taken from the last-hour label.
+    let watch = D.watchWithLastHour(D.surpriseWatch({ t: latest?.t, q: latest?.q, change3: three?.change, span3: three ? three.spanMinutes / 60 : undefined, fresh: river.fresh }, initialHistory.snapshots, initialHistory.status), river);
     const revision = D.forecastRevision(fc, initialHistory.snapshots, now);
     const history = saveSnapshot(initialHistory, D.makeSnapshot(fc, screen, latest, now), now);
-    if (history.status !== 'available') watch = D.surpriseWatch(null, [], 'unavailable');
-    state = { now, feeds: [...coreFeeds, rrmFeed, basinFeed], observations: merged, rawForecast, direct, gaugeCopy, fc, rains, observedRain, basin, gaugePoint, gridPoints, tides: allTides.slice(0, 4), allTides, change3, screen, watch, revision, history };
+    if (history.status !== 'available') watch = D.watchWithLastHour(D.surpriseWatch(null, [], 'unavailable'), river);
+    state = { now, feeds: [...coreFeeds, rrmFeed, basinFeed], observations: merged, rawForecast, direct, gaugeCopy, fc, rains, observedRain, basin, gaugePoint, gridPoints, tideRows: tideRows || [], tide, river, noaa, screen, watch, revision, history };
     render();
     } catch {
-      state = { now: Date.now(), feeds: [...sources, RRM_INDEX, BASIN_SOURCE].map(s => ({ ...s, error: 'Unexpected feed processing error' })), observations: [], rawForecast: [], direct: [], gaugeCopy: { error: 'Unavailable' }, fc: { usable: false, reason: 'Forecast processing unavailable', issued: null, rows: [] }, rains: [null, null], observedRain: null, basin: null, gaugePoint: null, gridPoints: [], tides: [], allTides: [], change3: null, screen: { usable: false, reason: 'River processing unavailable' }, watch: { code: 'unknown', reason: 'River processing unavailable' }, revision: { usable: false, reason: 'River processing unavailable' }, history: readHistory() };
+      const failedAt = Date.now(), noRiver = D.riverState([], failedAt);
+      state = { now: failedAt, feeds: [...sources, RRM_INDEX, BASIN_SOURCE].map(s => ({ ...s, error: 'Unexpected feed processing error' })), observations: [], rawForecast: [], direct: [], gaugeCopy: { error: 'Unavailable' }, fc: { usable: false, reason: 'Forecast processing unavailable', issued: null, rows: [] }, rains: [null, null], observedRain: null, basin: null, gaugePoint: null, gridPoints: [], tideRows: [], tide: D.tideState(null, failedAt), river: noRiver, noaa: D.noaaAgainstGauge(noRiver, null, null, failedAt), screen: { usable: false, reason: 'River processing unavailable' }, watch: { code: 'unknown', reason: 'River processing unavailable', lastHourLabel: null }, revision: { usable: false, reason: 'River processing unavailable' }, history: readHistory() };
       render();
     } finally { busy = false; $('refresh').disabled = false; $('main').setAttribute('aria-busy', 'false'); }
   }
   function render() {
-    const { now, feeds, observations, direct, gaugeCopy, fc, rains, observedRain, tides, allTides, screen, watch, revision, history } = state, last = observations.at(-1);
+    const { now, feeds, observations, direct, gaugeCopy, fc, rains, observedRain, tideRows, tide, river, noaa, screen, watch, revision, history } = state, last = observations.at(-1);
     put('update-status', 'Data checked ' + date(now) + ' · Updates about every 10 minutes while this page is on screen. No alerts are sent.');
     const problems = [];
-    if (!last || now - last.t > 2 * H) problems.push('The gauge is ' + (last ? 'stale' : 'unavailable'));
+    if (!river.fresh) problems.push(!river.available ? 'The gauge is unavailable' : river.staleCode === 'old-reading' ? 'The newest gauge reading is ' + plural(river.ageMinutes, 'minute') + ' old' : 'Gauge readings are missing in the last hour');
     if (!fc.usable) problems.push('the river forecast is unavailable');
     if (!rains.every(r => r?.fresh && r.complete)) problems.push('the rain summary is incomplete');
     if (!observedRain || !observedRain.fresh) problems.push('the nearby observed-rain report is ' + (observedRain ? 'stale' : 'unavailable'));
-    if (!tides.length) problems.push('tide predictions are unavailable');
+    if (!tide.available) problems.push('tide predictions are unavailable');
     $('feed-alert').hidden = !problems.length;
     const problemText = problems.join('; ');
     put('feed-alert', problemText ? problemText.charAt(0).toUpperCase() + problemText.slice(1) + '. Check the dated source details before planning.' : '');
-    put('gauge-heading', last && now - last.t > 2 * H ? 'Last river reading' : 'River now');
-    put('flow', num(last?.q));
-    badge('gauge-status', last ? (now - last.t <= 2 * H ? 'Recent observation' : 'Stale observation') : 'Unavailable', last && now - last.t <= 2 * H ? 'good' : 'caution');
-    put('gauge-time', last ? 'Last reading · ' + date(last.t) : 'No valid gauge reading retrieved');
-    put('observation-note', 'U.S. Geological Survey (USGS) station 12201500 · provisional observations, subject to revision' + (last ? ' · ' + last.source : ''));
-    for (const hours of [24, 3]) { const change = D.recentChange(observations, last, hours, now); put('change' + hours, change ? signed(change.change) + ' cfs' : 'Unavailable'); }
+    // NOAA's peak time is withheld whenever the gauge is above its value by the line and a rise is not ruled out.
+    const withholdPeak = noaa.aboveLine === true && noaa.riseInProgress !== false, onlyFalls = fc.usable && noaa.pathOnlyFalls === true;
+    const riverSaid = renderRiver(river, now), noaaSaid = renderNoaa(noaa, withholdPeak, now);
+    renderTide(tide, now);
+    announce([[[river.staleCode || 'fresh', river.riseStatus, river.riseStart?.atOrBefore ? 'at-or-before' : river.state].join('|'), riverSaid], [noaa.code + '|' + withholdPeak, noaaSaid]]);
+    put('observation-note', 'Flow in cubic feet per second (cfs) · U.S. Geological Survey (USGS) station 12201500 · provisional observations, subject to revision' + (last ? ' · ' + last.source : ''));
     const threshold = D.thresholdAt(now);
-    put('ops-flow', last ? num(last.q) + (now - last.t > 2 * H ? ' · stale' : '') : 'Unavailable');
-    put('ops-change', state.change3 ? signed(state.change3.change) : 'Unavailable');
     put('ops-threshold', threshold ? threshold.cfs + ' cfs' : 'Unavailable');
     put('ops-threshold-note', threshold ? threshold.label + ' · not a forecast' : 'Season unavailable · not a forecast');
-    put('ops-forecast', fc.usable ? num(fc.max) + ' cfs' : 'Unavailable');
+    const issuedText = fc.issued === null ? 'issue time unavailable' : 'issued ' + clock(fc.issued, now);
+    put('ops-forecast', !fc.usable ? 'Unavailable' : onlyFalls ? 'Only falls' : num(fc.max) + ' cfs');
+    put('ops-forecast-note', !fc.usable ? fc.reason : (onlyFalls ? 'NOAA’s path falls from its first value · ' : 'within the available path · ') + issuedText);
     renderWatch(watch, history);
-    renderRise(screen, last ? D.thresholdAt(last.t) : threshold);
+    renderRise(screen, last ? D.thresholdAt(last.t) : threshold, river, now);
     badge('forecast-status', fc.usable ? (fc.complete ? 'Up to 72 h' : 'Shorter horizon') : 'Unavailable', fc.usable ? 'neutral' : 'caution');
-    put('forecast-high', fc.usable ? num(fc.max) : '—');
-    put('forecast-time', !fc.usable ? fc.reason : fc.atStart && fc.atEnd ? 'Highest value occurs at both ends of the available window' : fc.atEnd ? 'Highest at the end · peak may be later' : fc.atStart ? 'Highest at the start of this forecast window' : 'Forecast high around ' + date(fc.firstMax));
+    put('forecast-high', fc.usable && !onlyFalls ? num(fc.max) : '—');
+    $('forecast-metric').hidden = fc.usable && onlyFalls;   // a path that only falls has no "high": words, not a number
+    put('forecast-time', !fc.usable ? fc.reason : withholdPeak ? NO_PEAK_TIME : onlyFalls ? 'NOAA’s forecast path only falls from its first value (' + num(fc.rows[0].q) + ' cfs at ' + clock(fc.rows[0].t, now) + '). That value is not a forecast high.' : fc.atStart && fc.atEnd ? 'Highest value occurs at both ends of the available window' : fc.atEnd ? 'Highest at the end · peak may be later' : fc.atStart ? 'Highest at the start of this forecast window' : 'Forecast high around ' + date(fc.firstMax));
     put('forecast-coverage', fc.usable ? (fc.startsAfterCheck ? 'Path begins ' + date(fc.start) + ' · ' + num((fc.start - now) / H) + ' h after this check; no check-time value was inserted. ' : '') + 'Available through ' + date(fc.end) + ' · ' + num(fc.hours) + ' h from this check.' + (fc.firstMax !== fc.lastMax ? ' The highest value occurs at more than one forecast time.' : '') : 'No forecast high or timing estimate is shown.');
     put('forecast-issue', fc.issued === null ? 'Issue time unavailable' : 'NOAA issued · ' + date(fc.issued));
     put('forecast-revision', revision.usable ? 'Across the same next 24 hours, the latest NOAA issue’s high is ' + signed(revision.difference) + ' cfs versus the earlier issue from ' + date(revision.previousIssue) + '.' : revision.reason);
     renderRainForecast(rains, now);
     renderObservedRain(observedRain);
-    badge('tide-status', tides.length ? 'Predicted' : 'Unavailable', tides.length ? 'neutral' : 'caution');
-    $('tide-list').innerHTML = tides.length ? tides.map(r => '<div class="tide-row"><span>' + (r.type === 'H' ? 'High' : 'Low') + '</span><strong>' + r.v.toFixed(1) + '<span class="small-label">ft MLLW</span></strong><time datetime="' + new Date(r.t).toISOString() + '">' + esc(date(r.t)) + '</time></div>').join('') : 'No upcoming predictions retrieved. Use the official tide source.';
-    renderCrest(fc, allTides);
+    badge('tide-status', tide.available ? 'Predicted' : 'Unavailable', tide.available ? 'neutral' : 'caution');
+    const listed = tideList();
+    $('tide-list').innerHTML = listed.length ? listed.map(r => '<div class="tide-row"><span>' + (r.type === 'H' ? 'High' : 'Low') + '</span><strong>' + feet(r.v) + '<span class="small-label">ft MLLW</span></strong><time datetime="' + new Date(r.t).toISOString() + '">' + esc(date(r.t)) + (r.passed ? ' · passed' : '') + '</time></div>').join('') : 'Tide predictions unavailable. Use the official tide source.';
+    renderCrest(fc, tideRows, withholdPeak);
     const directLast = [...direct].sort((a, b) => a.t - b.t).at(-1);
     const sourceTimes = [(fc.issued === null ? 'Forecast issue time unavailable' : 'Forecast issued ' + date(fc.issued)) + (gaugeCopy.error ? ' · Gauge copy: ' + gaugeCopy.error : ''), directLast ? 'Latest direct USGS reading ' + date(directLast.t) : 'No direct USGS reading', ...rains.map(r => r ? 'Forecast updated ' + date(r.updated) : 'Update unavailable'), 'Astronomical high/low predictions; issue time not supplied', observedRain ? 'Product issued ' + date(observedRain.issued) + '; issue time is not a gauge measurement time' : 'Product issue time unavailable', state.basin ? 'Simplified gauge-upstream drainage area · ' + state.basin.pointCount + ' source vertices · based on whole NHDPlusV2 catchments' : 'Gauge-upstream drainage geometry unavailable'];
     $('source-status').innerHTML = feeds.map((f, i) => '<article class="card source-card"><h2>' + esc(f.name) + '</h2><span class="pill ' + (f.error ? 'caution' : 'neutral') + '">' + (f.error ? 'Feed problem' : 'Retrieved') + '</span><p class="detail">' + esc(sourceTimes[i]) + '</p><p class="meta">' + esc(f.error || 'Retrieved ' + date(f.retrieved)) + '</p><a href="' + esc(f.url) + '" target="_blank" rel="noopener">Inspect public feed ↗</a></article>').join('') + radarSourceCard();
@@ -294,6 +327,91 @@
     renderStormLog();
     chart();
   }
+  // The measured River block. Everything printed here comes from D.riverState: every duration is counted between
+  // gauge reading time stamps, and the device's check time is used only for the reading's age. No colour or class
+  // changes with the state. Returns the sentence a screen reader is told when the state changes.
+  function renderRiver(river, now) {
+    const t = value => clock(value, now), reading = river.reading, start = river.riseStart, high = river.high;
+    const delta = value => { const shown = Math.round(value * 10) / 10; return (shown > 0 ? '+' : '') + num(shown === 0 ? 0 : shown); };
+    const age = reading ? plural(river.ageMinutes, 'minute') : '';
+    put('flow', reading ? num(reading.q) : '—');
+    put('river-time', reading ? 'at ' + t(reading.t) : 'No gauge reading retrieved');
+    put('river-age', reading ? age + ' old' : '');
+    if (!river.fresh) {
+      const why = !reading ? 'no gauge reading was retrieved' : river.staleCode === 'old-reading' ? 'the gauge feed is ' + age + ' behind' : river.gapMinutes === null ? 'the gauge readings do not reach back one hour' : 'there is a ' + num(river.gapMinutes) + '-minute hole in the gauge readings of the last hour';
+      const cannotTell = 'Cannot tell whether the river is rising: ' + why + '.';
+      for (const id of ['river-change', 'river-wait', 'river-rain-note', 'river-past', 'river-high', 'river-rise']) show(id, '');
+      show('river-state', cannotTell);
+      return cannotTell;
+    }
+    const hour = river.lastHour, three = river.threeHour, number = river.threshold;
+    // Two figures, each kept on one line of its own when the block is narrow. A missing figure stays visibly unavailable.
+    $('river-change').hidden = false;
+    $('river-change').innerHTML = '<span>' + esc((hour ? (hour.spanMinutes === 60 ? 'Last hour: ' : 'Last ' + num(hour.spanMinutes) + ' minutes: ') + delta(hour.change) + ' cfs (' + hour.label + ')' : 'Last hour: unavailable') + '.') + '</span> <span>' + esc((three ? 'About 3 hours: ' + delta(three.change) + ' cfs' : 'About 3 hours: unavailable') + '.') + '</span>';
+    show('river-rise', river.rise && river.low24 && number ? 'Rise above the 24-hour low: ' + num(river.rise.cfs) + ' cfs (' + Math.floor(river.rise.share * 100 + 1e-9) + '% of the ' + number.cfs + ' cfs ' + number.label + ' number; low ' + num(river.low24.q) + ' cfs at ' + t(river.low24.t) + ').' : 'Measured rise unavailable: the gauge record has a gap in the last 24 hours.');
+    let stateText = '', waitText = '', rainText = '', pastText = '', highText = '';
+    if (river.riseStatus === 'in-progress' && start && start.atOrBefore) {
+      // The rise is older than the readings compared: no "highest reading", no state sentence, no look-back count.
+      pastText = 'The measured rise passed the ' + start.threshold.cfs + ' cfs number at or before ' + t(start.t) + '. The top of that rise is older than the readings this page compares.';
+    } else if (river.riseStatus === 'in-progress' && start && high) {
+      const top = num(high.q) + ' cfs at ' + t(high.t);
+      pastText = 'Past the ' + start.threshold.cfs + ' cfs ' + start.threshold.label + ' number since the ' + t(start.t) + ' reading. This page’s arithmetic, not the Department of Health’s decision.';
+      highText = 'Highest reading since then: ' + top + '.';
+      if (river.state === 'new-high') {
+        const up = hour ? Math.round(hour.change * 10) / 10 : 0;
+        stateText = up > 0 ? 'Still rising as of ' + t(reading.t) + ' (reading ' + age + ' old): ' + num(reading.q) + ' cfs is the highest of this rise so far, up ' + num(up) + ' cfs in the hour before. The top of this rise is at this reading or later.'
+          : 'Highest reading of this rise so far: ' + num(reading.q) + ' cfs at ' + t(reading.t) + ' (reading ' + age + ' old). The top of this rise is at this reading or later.';
+        waitText = SAY.wait();
+      } else if (river.state === 'rising-again') stateText = 'Up ' + num(Math.round(hour.change * 10) / 10) + ' cfs in the last hour; the newest reading is ' + num(river.belowHigh.cfs) + ' cfs below this rise’s high of ' + top + '.';
+      else if (river.state === 'falling') stateText = 'Now at least ' + percent(RULES.fallingFraction) + '% below the high of ' + top + '. ' + SAY.falling();
+      else if (river.state === 'may-have-peaked') { stateText = 'No new high since ' + t(high.t) + ' (' + hoursMinutes(river.minutesSinceHigh) + ' of readings): the river may have peaked at ' + num(high.q) + ' cfs. ' + SAY.peak(); rainText = RAIN_BESIDE_PAUSE; }
+      else if (river.state === 'paused') { stateText = 'No new high since ' + t(high.t) + '. ' + SAY.pause(); rainText = RAIN_BESIDE_PAUSE; }
+      else if (river.state === 'just-off-high') stateText = 'Highest reading of this rise: ' + top + ', ' + plural(river.minutesSinceHigh, 'minute') + ' of readings before the newest one.';
+      else {
+        // 'cannot-tell': a hole lies between the highest reading held and the newest one. Measured facts only.
+        stateText = 'Gauge readings are missing for ' + num(river.gapMinutes) + ' minutes between the highest reading held (' + top + ') and the newest reading. No state is given for this rise.';
+        highText = '';
+      }
+    }
+    show('river-state', stateText); show('river-wait', waitText); show('river-rain-note', rainText); show('river-past', pastText); show('river-high', highText);
+    return stateText || (start && start.atOrBefore ? pastText : '');
+  }
+  // NOAA's CURRENT issue against the gauge. It reads no saved history, so it works on a first visit.
+  function renderNoaa(noaa, withholdPeak, now) {
+    const t = value => clock(value, now), issued = noaa.issued !== null && noaa.issueAgeMinutes !== null ? 'issued ' + t(noaa.issued) + ' (' + issueAge(noaa.issueAgeMinutes) + ' ago)' : null;
+    let compare;
+    if (issued && noaa.forecastCfs !== null && noaa.difference !== null) {
+      const gap = Math.round(noaa.difference * 10) / 10;
+      compare = 'NOAA’s river forecast, ' + issued + ', has ' + num(noaa.forecastCfs) + ' cfs for ' + t(noaa.readingTime) + '. The gauge read ' + num(noaa.gaugeCfs) + ' cfs then: ' + (gap > 0 ? num(gap) + ' cfs higher' : gap < 0 ? num(-gap) + ' cfs lower' : 'the same to the nearest tenth') + '.';
+    } else if (issued && noaa.readingTime !== null) compare = 'NOAA’s river forecast, ' + issued + ', has no value for ' + t(noaa.readingTime) + ', the time of the newest gauge reading. No comparison is made.';
+    else if (issued) compare = 'NOAA’s river forecast was ' + issued + '. No gauge reading is available to compare with it.';
+    else compare = 'NOAA’s river forecast is unavailable' + (noaa.reason && noaa.reason !== 'NOAA river forecast unavailable' ? ' (' + noaa.reason + ')' : '') + '. No comparison is made.';
+    const flag = noaa.code === 'not-tracking' ? 'NOAA’s forecast is not tracking this rise. Do not read a peak time from it.' : withholdPeak ? 'Whether a measured rise is in progress cannot be told from the gauge record. ' + NO_PEAK_TIME : '';
+    put('noaa-compare', compare); show('noaa-flag', flag);
+    return flag;
+  }
+  const feet = value => { const text = value.toFixed(1); return text === '-0.0' ? '0.0' : text; };
+  // The Tide block: the last high or low (kept after it passes), the direction, and the next two.
+  function renderTide(tide, now) {
+    if (!tide.available) { put('tide-now', 'Tide predictions unavailable. Use the official tide source.'); return; }
+    const t = value => clock(value, now), name = r => (r.type === 'H' ? 'high' : 'low') + ' of ' + feet(r.v) + ' ft at ' + t(r.t);
+    const ahead = 'a ' + name(tide.next[0]) + (tide.next[1] ? ', then a ' + name(tide.next[1]) : '');
+    if (tide.last && tide.direction) put('tide-now', (tide.last.type === 'H' ? 'High' : 'Low') + ' of ' + feet(tide.last.v) + ' ft was at ' + t(tide.last.t) + ', ' + elapsed(tide.minutesSinceLast) + ' before this check. The tide is ' + tide.direction + ' to ' + ahead + '.');
+    else put('tide-now', (tide.last ? 'Last: a ' + name(tide.last) + '. ' : '') + 'Next: ' + ahead + '. No tide direction is given: ' + tide.reason.charAt(0).toLowerCase() + tide.reason.slice(1) + '.');
+  }
+  // The last high or low stays listed after it passes, marked as passed, followed by the next four.
+  function tideList() {
+    const { tide, tideRows, now } = state;
+    return tide.available ? [...(tide.last ? [{ ...tide.last, passed: true }] : []), ...tideRows.filter(r => r.t > now).slice(0, 4)] : [];
+  }
+  let announced = null;
+  // Screen readers are told once when the river state or the NOAA comparison changes: only the part that changed,
+  // not on every refresh, and not on first load. `parts` is [[state key, sentence], ...].
+  function announce(parts) {
+    const changed = announced === null ? [] : parts.filter((part, index) => part[0] !== announced[index]);
+    if (changed.length) put('river-announce', changed.map(part => part[1]).filter(Boolean).join(' '));
+    announced = parts.map(part => part[0]);
+  }
   function renderRainForecast(rains, now) {
     const fullRain = rains.every(r => r?.fresh && r.complete);
     const meanMm = fullRain ? (rains[0].mm + rains[1].mm) / 2 : null;
@@ -304,21 +422,36 @@
     put('rain-note', verifiedGeometry ? 'Two separate National Weather Service (NWS) point forecasts whose current full grid-cell polygons were verified inside the displayed gauge-upstream drainage reference. The headline is their mean for the 24 hours from ' + date(now) + '; it is not an observed or area-wide total.' : 'A National Weather Service (NWS) forecast point is shown only after its current full grid-cell polygon is verified inside the displayed gauge-upstream drainage reference. Any point that cannot be checked is withheld; no partial set becomes the headline mean.');
     const labels = ['Mid area · grid 136,114', 'Upper-east area · grid 139,116'];
     $('rain-points').innerHTML = rains.map((r, i) => '<div class="rain-point"><strong><span>' + labels[i] + '</span><span>' + (r?.fresh && r.complete ? esc(inches(r.mm)) + ' in.' : 'Unavailable') + '</span></strong><small>' + (r ? (r.fresh ? '' : 'Stale · ') + 'Forecast updated ' + esc(date(r.updated)) + ' · ' + num(r.coveredHours) + '/24 h covered' : 'Forecast feed unavailable') + '</small></div>').join('');
-    const rows = Array.from({ length: 6 }, (_, index) => ({ index, a: rains[0]?.bins?.[index] || null, b: rains[1]?.bins?.[index] || null }));
-    $('rain-forecast-table').innerHTML = '<table><caption>Six-hour forecast accumulation blocks beginning at this page’s feed-check time. Missing coverage remains unavailable.</caption><thead><tr><th scope="col">Pacific interval</th><th scope="col">Mid · 136,114</th><th scope="col">Upper-east · 139,116</th></tr></thead><tbody>' + rows.map(row => { const start = row.a?.t ?? row.b?.t, end = row.a?.end ?? row.b?.end; return '<tr><td>' + (Number.isFinite(start) && Number.isFinite(end) ? esc(date(start)) + '–' + esc(date(end)) : 'Unavailable') + '</td><td>' + (row.a?.complete && row.a.mm !== null ? esc(inches(row.a.mm)) + ' in.' : 'Unavailable') + '</td><td>' + (row.b?.complete && row.b.mm !== null ? esc(inches(row.b.mm)) + ' in.' : 'Unavailable') + '</td></tr>'; }).join('') + '</tbody></table>';
-    const available = rows.flatMap(row => [row.a, row.b]).filter(bin => bin?.complete && bin.mm !== null);
+    // The dry-season context is words only: no rule, no colour and no computed "at or above" line on this page's rain.
+    $('rain-context').hidden = D.drySeasonContext(now) !== true;
+    $('rain-context').innerHTML = $('rain-context').hidden ? '' : '<strong>Context, not an alert.</strong> <span id="rain-context-text">' + esc(SAY.rainContext()) + '</span> <span class="lookback-caveat">' + esc(E.caveat) + '</span>';
+    // Each six-hour block is "missing" (no value), "zero" (a complete block forecast at exactly 0) or "amount".
+    const rows = Array.from({ length: 6 }, (_, index) => ({ index, a: rains[0]?.bins?.[index] || null, b: rains[1]?.bins?.[index] || null })).map(row => ({ ...row, blocks: [D.rainBlockState(row.a), D.rainBlockState(row.b)] }));
+    const cell = block => block.status === 'missing' ? 'Unavailable' : esc(inches(block.mm)) + ' in.';
+    $('rain-forecast-table').innerHTML = '<table><caption>Six-hour forecast accumulation blocks beginning at this page’s feed-check time. Missing coverage remains unavailable.</caption><thead><tr><th scope="col">Pacific interval</th><th scope="col">Mid · 136,114</th><th scope="col">Upper-east · 139,116</th></tr></thead><tbody>' + rows.map(row => { const start = row.a?.t ?? row.b?.t, end = row.a?.end ?? row.b?.end; return '<tr><td>' + (Number.isFinite(start) && Number.isFinite(end) ? esc(date(start)) + '–' + esc(date(end)) : 'Unavailable') + '</td><td>' + cell(row.blocks[0]) + '</td><td>' + cell(row.blocks[1]) + '</td></tr>'; }).join('') + '</tbody></table>';
+    const available = rows.flatMap(row => row.blocks).filter(block => block.status !== 'missing'), anyMissing = rows.some(row => row.blocks.some(block => block.status === 'missing'));
     if (!available.length) { $('rain-chart').className = 'rain-chart chart-empty'; put('rain-chart', 'Complete six-hour rain blocks are unavailable.'); return; }
-    const w = Math.max(260, Math.round($('rain-chart').clientWidth || 760)), h = 240, left = 45, right = 12, top = 34, bottom = 48, inner = w - left - right, group = inner / rows.length, bar = Math.min(34, group * .3), maxIn = Math.max(.01, ...available.map(bin => bin.mm / 25.4)) * 1.15;
+    const w = Math.max(260, Math.round($('rain-chart').clientWidth || 760)), h = anyMissing ? 258 : 240, left = 45, right = 12, top = anyMissing ? 52 : 34, bottom = 48, inner = w - left - right, group = inner / rows.length, bar = Math.min(34, group * .3), maxIn = Math.max(.01, ...available.map(block => block.mm / 25.4)) * 1.15;
     rainChartWidth = w;
     const y = value => top + (1 - value / maxIn) * (h - top - bottom);
     const secondLegendX = Math.max(148, Math.min(205, w - 125));
-    let svg = '<svg viewBox="0 0 ' + w + ' ' + h + '" role="img" aria-labelledby="rain-svg-title rain-svg-desc"><title id="rain-svg-title">Forecast rain in six-hour blocks at two National Weather Service grid points</title><desc id="rain-svg-desc">Paired bars show forecast inches at mid-area grid 136,114 and upper-east grid 139,116. Missing blocks have no bar. Values are also available in the table.</desc><g class="rain-legend"><rect x="45" y="8" width="12" height="12" class="rain-a"></rect><text x="63" y="19">Mid point</text><rect x="' + secondLegendX + '" y="8" width="12" height="12" class="rain-b"></rect><text x="' + (secondLegendX + 18) + '" y="19">Upper-east point</text></g>';
+    let svg = '<svg viewBox="0 0 ' + w + ' ' + h + '" role="img" aria-labelledby="rain-svg-title rain-svg-desc"><title id="rain-svg-title">Forecast rain in six-hour blocks at two National Weather Service grid points</title><desc id="rain-svg-desc">Paired bars show forecast inches at mid-area grid 136,114 and upper-east grid 139,116. A block with no value is drawn as a hatched column labelled no data. A block forecast at exactly zero is labelled 0. Values are also available in the table.</desc><defs><pattern id="rain-missing-hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="7" class="rain-missing-line"></line></pattern></defs><g class="rain-legend"><rect x="45" y="8" width="12" height="12" class="rain-a"></rect><text x="63" y="19">Mid point</text><rect x="' + secondLegendX + '" y="8" width="12" height="12" class="rain-b"></rect><text x="' + (secondLegendX + 18) + '" y="19">Upper-east point</text>' + (anyMissing ? '<rect x="45" y="27" width="12" height="12" class="rain-missing"></rect><text x="63" y="38">No data (not zero)</text>' : '') + '</g>';
     for (let i = 0; i <= 3; i++) { const value = maxIn * i / 3, yy = y(value); svg += '<line x1="' + left + '" x2="' + (w - right) + '" y1="' + yy + '" y2="' + yy + '" class="chart-grid"></line><text x="' + (left - 7) + '" y="' + (yy + 4) + '" text-anchor="end">' + value.toFixed(2) + '</text>'; }
     rows.forEach((row, index) => {
-      const center = left + group * (index + .5), values = [row.a, row.b];
-      values.forEach((bin, series) => { if (!bin?.complete || bin.mm === null) return; const value = bin.mm / 25.4, yy = y(value); svg += '<rect x="' + (center + (series ? 2 : -bar - 2)) + '" y="' + yy + '" width="' + bar + '" height="' + Math.max(0, h - bottom - yy) + '" class="' + (series ? 'rain-b' : 'rain-a') + '"><title>' + labels[series] + ': ' + inches(bin.mm) + ' inches</title></rect>'; });
-      svg += '<text x="' + center + '" y="' + (h - 20) + '" text-anchor="middle">+' + (index * 6) + '–' + ((index + 1) * 6) + ' h</text>';
+      const center = left + group * (index + .5);
+      row.blocks.forEach((block, series) => {
+        const x = center + (series ? 2 : -bar - 2), middle = x + bar / 2;
+        if (block.status === 'missing') {
+          // Pattern plus words, never colour alone: a hatched column over the whole plot height and "no data".
+          const middleY = (top + h - bottom) / 2;
+          svg += '<rect x="' + x + '" y="' + top + '" width="' + bar + '" height="' + (h - bottom - top) + '" class="rain-missing"><title>' + labels[series] + ': no data for this block</title></rect><text class="rain-missing-label" x="' + middle + '" y="' + (middleY + 4) + '" text-anchor="middle" transform="rotate(-90 ' + middle + ' ' + middleY + ')">no data</text>';
+        } else if (block.status === 'zero') svg += '<text class="rain-zero-label" x="' + middle + '" y="' + (h - bottom - 5) + '" text-anchor="middle">0<title>' + labels[series] + ': forecast at exactly 0.00 inches</title></text>';
+        else { const yy = y(block.mm / 25.4); svg += '<rect x="' + x + '" y="' + yy + '" width="' + bar + '" height="' + Math.max(0, h - bottom - yy) + '" class="' + (series ? 'rain-b' : 'rain-a') + '"><title>' + labels[series] + ': ' + inches(block.mm) + ' inches</title></rect>'; }
+      });
+      // A narrow chart has no room for "+18–24 h" six times: the hours go under the axis and the unit in a caption.
+      svg += '<text x="' + center + '" y="' + (h - (group < 58 ? 28 : 20)) + '" text-anchor="middle">' + (group < 58 ? (index * 6) + '–' + ((index + 1) * 6) : '+' + (index * 6) + '–' + ((index + 1) * 6) + ' h') + '</text>';
     });
+    if (group < 58) svg += '<text x="' + (left + inner / 2) + '" y="' + (h - 9) + '" text-anchor="middle">hours after this check</text>';
     svg += '<text x="7" y="20">in.</text></svg>';
     $('rain-chart').className = 'rain-chart'; $('rain-chart').innerHTML = svg;
   }
@@ -329,18 +462,21 @@
     }
     badge('observed-rain-status', report.fresh ? 'Recent report' : 'Stale report', report.fresh ? 'neutral' : 'caution');
     put('observed-rain-issued', 'Report issued ' + date(report.issued) + ' · issue time, not a gauge measurement time');
-    const windows = report.windows.slice(0, 5);
-    $('observed-rain-table').innerHTML = '<table><caption>Provisional rolling precipitation totals in inches from automated stations near the watershed. National Weather Service accuracy has not been verified.</caption><thead><tr><th scope="col">Station</th>' + windows.map(value => '<th scope="col">' + value + ' h</th>').join('') + '</tr></thead><tbody>' + report.stations.map(station => '<tr><th scope="row">' + esc(station.label) + '</th>' + windows.map((value, index) => '<td>' + (station.available && station.values[index] !== null ? station.values[index].toFixed(2) : 'Unavailable') + '</td>').join('') + '</tr>').join('') + '</tbody></table>';
+    // Consistency flag, computed only from the totals shown: one gauge at 0.00 inch for 24 hours while both others report rain.
+    const windows = report.windows.slice(0, 5), suspect = D.suspectZeroRain(report);
+    $('observed-rain-table').innerHTML = '<table><caption>Provisional rolling precipitation totals in inches from automated stations near the watershed. National Weather Service accuracy has not been verified.</caption><thead><tr><th scope="col">Station</th>' + windows.map(value => '<th scope="col">' + value + ' h</th>').join('') + '</tr></thead><tbody>' + report.stations.map((station, row) => '<tr><th scope="row">' + esc(station.label) + (suspect.flags[row] ? '<span class="suspect-note">Reads zero while both other gauges report rain; treat as suspect.</span>' : '') + '</th>' + windows.map((value, index) => '<td>' + (station.available && station.values[index] !== null ? station.values[index].toFixed(2) : 'Unavailable') + '</td>').join('') + '</tr>').join('') + '</tbody></table>';
   }
   function renderWatch(watch, history) {
     const labels = { outpacing: 'ABOVE EARLIER FORECAST', 'above-prior': 'ABOVE EARLIER FORECAST', tracking: 'NOT ABOVE CHECK LINE', learning: 'NO EARLIER FORECAST', unknown: 'CHECK UNAVAILABLE' };
-    const titles = { outpacing: 'River is above the earlier NOAA forecast and still rising', 'above-prior': 'River is above the earlier NOAA forecast, but not rising now', tracking: 'River is not above the earlier-forecast check line', learning: 'No earlier forecast to compare yet', unknown: 'Earlier-forecast check unavailable' };
+    // The word "rising" comes only from the last-hour label (D.watchWithLastHour). With no label, neither "rising"
+    // nor "not rising" is printed.
+    const titles = { outpacing: 'River is above the earlier NOAA forecast and rising in the last hour of readings', 'above-prior': watch.lastHourLabel ? 'River is above the earlier NOAA forecast, but not rising in the last hour of readings' : 'River is above the earlier NOAA forecast', tracking: 'River is not above the earlier-forecast check line', learning: 'No earlier forecast to compare yet', unknown: 'Earlier-forecast check unavailable' };
     $('surprise-watch').className = 'watch-card ' + (watch.code || 'unknown');
     badge('watch-state', labels[watch.code] || labels.unknown, watch.code === 'outpacing' || watch.code === 'above-prior' ? 'caution' : 'neutral');
     put('watch-title', titles[watch.code] || titles.unknown);
     $('watch-metrics').hidden = !watch.snapshot;
     if (watch.snapshot) {
-      put('watch-detail', 'An earlier NOAA forecast expected ' + num(watch.expected) + ' cfs at this time. The gauge reads ' + num(watch.observed) + ' cfs (' + signed(watch.difference) + ' cfs) and changed ' + signed(watch.change3) + ' cfs over ' + num(watch.span3) + ' hours. The check line is ' + num(watch.line) + ' cfs above the earlier forecast. This is not a closure, safety, or all-clear signal.');
+      put('watch-detail', 'An earlier NOAA forecast expected ' + num(watch.expected) + ' cfs at this time. The gauge reads ' + num(watch.observed) + ' cfs (' + signed(watch.difference) + ' cfs) and changed ' + signed(watch.change3) + ' cfs over ' + num(watch.span3) + ' hours. ' + (watch.lastHourLabel ? 'Over the last hour of readings it was ' + watch.lastHourLabel + '. ' : 'The last-hour change is unavailable, so no direction is given. ') + 'The check line is ' + num(watch.line) + ' cfs above the earlier forecast. This is not a closure, safety, or all-clear signal.');
       put('watch-source', 'Earlier NOAA issue: ' + date(watch.snapshot.issueTime) + ' · first recorded here ' + date(watch.snapshot.capturedAt) + ' · ' + num(watch.age) + ' hours before this gauge reading. The check line is unvalidated and is not an alert threshold.');
     } else {
       put('watch-detail', watch.code === 'learning' ? 'An eligible NOAA forecast from 3–36 hours earlier is not available yet. Use the dated panels above to see which current data are available.' : 'The earlier-forecast check is unavailable. Use the dated panels above to see which current data are available.');
@@ -350,7 +486,13 @@
     put('watch-observed', watch.observed === null || watch.observed === undefined ? '—' : num(watch.observed));
     put('watch-change', watch.change3 === null || watch.change3 === undefined ? '—' : signed(watch.change3));
   }
-  function renderRise(screen, threshold) {
+  // "What NOAA's forecast adds": the forward look from the newest gauge reading. While the River block shows the
+  // number was passed in the last 48 hours of readings, this card never prints "below the numeric line".
+  function renderRise(screen, threshold, river, now) {
+    const start = river?.riseStatus === 'in-progress' ? river.riseStart : null;
+    show('rise-passed', start ? 'The measured rise passed the ' + start.threshold.cfs + ' cfs number ' + (start.atOrBefore ? 'at or before ' + clock(start.t, now) : 'at the ' + clock(start.t, now) + ' reading') + ' (River block at the top). The figures on this card look forward from the newest reading and do not undo that.' : '');
+    show('rise-noaa-dry', D.drySeasonContext(now) === true ? SAY.noaaDry() + ' ' + E.caveat : '');
+    $('rise-progress').parentElement.hidden = false;
     if (!screen?.usable) {
       badge('rise-status', 'Unavailable', 'caution'); put('rise-percent', '—'); put('rise-title', screen?.reason || 'Planning comparison unavailable');
       put('screen-rise', '—'); put('season-threshold', threshold ? threshold.cfs + ' cfs' : '—'); put('rise-detail', 'No partial path is turned into a reassuring result.'); $('rise-progress').style.width = '0'; return;
@@ -359,13 +501,17 @@
     badge('rise-status', 'Experimental', exceeded ? 'caution' : 'neutral'); put('rise-percent', percent.toLocaleString('en-US'));
     put('rise-title', 'Largest relative rise: ' + num(screen.riseAtHighestShare) + ' cfs, or ' + percent.toLocaleString('en-US') + '% of the ' + screen.threshold.cfs + ' cfs ' + screen.threshold.label + ' reference.');
     put('screen-rise', num(screen.riseAtHighestShare) + ' cfs'); put('season-threshold', screen.threshold.cfs + ' cfs');
-    const relationText = relation.code === 'at' ? 'At the numeric line' : num(relation.distance) + ' cfs ' + relation.code + ' the numeric line';
+    const relationText = start && relation.code === 'below' ? 'Forward look from the newest reading; its largest relative rise is' : relation.code === 'at' ? 'At the numeric line' : num(relation.distance) + ' cfs ' + relation.code + ' the numeric line';
     put('rise-detail', relationText + ' at the ' + screen.pointSource + ' point ' + date(screen.pointTime) + '. This point has the largest rise relative to the seasonal reference in effect at that time; a larger raw rise may exist when the reference changes. Rolling low ' + num(screen.baselineCfs) + ' cfs at ' + date(screen.baselineTime) + '. Gauge alignment ' + signed(screen.adjustment) + ' cfs. Not official status.');
+    // A bar filling toward a number the measured rise already passed would read as "not there yet": leave it out.
+    $('rise-progress').parentElement.hidden = !!start && relation.code === 'below';
     $('rise-progress').style.width = Math.min(100, Math.max(0, screen.percent)) + '%';
     $('rise-progress').style.background = exceeded ? 'var(--coral)' : 'var(--teal)';
   }
-  function renderCrest(fc, tides) {
+  function renderCrest(fc, tides, withholdPeak) {
     $('crest-nearby').innerHTML = '';
+    // While the gauge is above NOAA's value by the line, no "forecast to fall" sentence and no forecast-high time appear.
+    if (fc?.usable && withholdPeak) { put('crest-time', NO_PEAK_TIME); put('crest-detail', 'No forecast-high time or tide pairing is shown.'); return; }
     if (!fc?.usable || fc.atStart || fc.atEnd) {
       put('crest-time', !fc?.usable ? 'Forecast timing unavailable' : fc.atEnd ? 'Highest value is at the forecast’s end' : 'Highest value is at the forecast’s start');
       put('crest-detail', !fc?.usable ? fc.reason : fc.atEnd ? 'The high may occur later than the available path. No tide pairing is inferred.' : 'The river is forecast to fall from the start of the window. No future high time is inferred.'); return;
@@ -383,7 +529,7 @@
     const all = [...obs, ...future, ...saved];
     $('saved-path-legend').hidden = !saved.length;
     if (!all.length) { $('flow-chart').className = 'chart-empty'; put('flow-chart', 'River data unavailable. Check the official sources.'); put('chart-description', 'No river path is available. The radar remains separate weather context.'); return; }
-    const w = Math.max(230, $('flow-chart').clientWidth), h = 280, l = 49, right = 13, top = 22, bottom = 44;
+    const w = Math.max(230, $('flow-chart').clientWidth), h = 296, l = 49, right = 13, top = 22, bottom = 60;
     const max = Math.max(1, ...all.map(r => r.q)) * 1.15, x = t => l + (t - start) / (end - start) * (w - l - right), y = q => top + (1 - q / max) * (h - top - bottom);
     const paths = (rows, gap, color, dash) => {
       const groups = []; rows.forEach((r, i) => { if (!i || r.t - rows[i - 1].t > gap) groups.push([]); groups.at(-1).push(r); });
@@ -394,10 +540,13 @@
     for (let i = 0; i <= 4; i++) { const q = max * i / 4; svg += '<line x1="' + l + '" x2="' + (w - right) + '" y1="' + y(q) + '" y2="' + y(q) + '" stroke="var(--line)"/><text x="' + (l - 7) + '" y="' + (y(q) + 4) + '" text-anchor="end">' + Math.round(q).toLocaleString('en-US') + '</text>'; }
     svg += '<text x="' + l + '" y="13">cfs</text><line x1="' + x(now) + '" x2="' + x(now) + '" y1="' + top + '" y2="' + (h - bottom) + '" stroke="var(--muted)" stroke-dasharray="3 4"/>';
     const ticks = w < 500 ? [[start, '−48 h'], [now, '0 h'], [end, '+72 h']] : [[start, '−48 h'], [now - 24 * H, '−24 h'], [now, 'Check time'], [now + 24 * H, '+24 h'], [now + 48 * H, '+48 h'], [end, '+72 h']];
-    for (let i = 0; i < ticks.length; i++) svg += '<text x="' + x(ticks[i][0]) + '" y="' + (h - 16) + '" text-anchor="' + (i === 0 ? 'start' : i === ticks.length - 1 ? 'end' : 'middle') + '">' + ticks[i][1] + '</text>';
+    // Each tick carries its offset from the check time and, beneath it, the Pacific clock time it stands for.
+    // On a narrow chart only the check time has room for its clock time; the two ends carry the day.
+    const tickClock = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', weekday: 'short', hour: 'numeric', minute: '2-digit' }), tickDay = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', weekday: 'short' });
+    for (let i = 0; i < ticks.length; i++) { const anchor = i === 0 ? 'start' : i === ticks.length - 1 ? 'end' : 'middle', under = w >= 500 || ticks[i][0] === now ? tickClock : tickDay; svg += '<text x="' + x(ticks[i][0]) + '" y="' + (h - 34) + '" text-anchor="' + anchor + '">' + ticks[i][1] + '</text><text class="tick-clock" x="' + x(ticks[i][0]) + '" y="' + (h - 16) + '" text-anchor="' + anchor + '">' + esc(under.format(ticks[i][0])) + '</text>'; }
     svg += paths(saved, 6 * H, 'var(--saved)', '2 5') + paths(obs, 2 * H, 'var(--teal)', '') + paths(future, 6 * H, 'var(--navy)', '7 5') + '</svg>';
     $('flow-chart').className = ''; $('flow-chart').innerHTML = svg;
-    put('chart-description', (saved.length ? 'The dotted amber line is an earlier NOAA forecast after one gauge alignment. ' : 'No eligible earlier NOAA forecast is available yet. ') + 'NOAA’s current dashed forecast remains raw and unshifted. Gaps stay visible; 0 h is this page’s data-check time.');
+    put('chart-description', (saved.length ? 'The dotted amber line is an earlier NOAA forecast after one gauge alignment. ' : 'No eligible earlier NOAA forecast is available yet. ') + 'NOAA’s current dashed forecast remains raw and unshifted. Gaps stay visible. Clock times under the axis are Pacific; 0 h is this page’s data-check time, ' + clockFmt.format(now) + '.');
   }
   function readStormLog() {
     try {
@@ -423,7 +572,7 @@
     return D.stormRecord({
       id: new Date().toISOString().replace(/[^0-9A-Za-z]/g, '') + '-' + random,
       savedAt: new Date().toISOString(), tag, note, feedCheckAt: new Date(state.now).toISOString(), gaugeCfs: last?.q ?? null, gaugeTime: last ? new Date(last.t).toISOString() : null,
-      change3Cfs: state.change3?.change ?? null, forecastHighCfs: state.fc.usable ? state.fc.max : null, forecastIssue: state.fc.issued === null ? null : new Date(state.fc.issued).toISOString(), forecastHighTime: state.fc.usable && state.fc.firstMax !== null ? new Date(state.fc.firstMax).toISOString() : null,
+      change3Cfs: state.river.threeHour?.change ?? null, forecastHighCfs: state.fc.usable ? state.fc.max : null, forecastIssue: state.fc.issued === null ? null : new Date(state.fc.issued).toISOString(), forecastHighTime: state.fc.usable && state.fc.firstMax !== null ? new Date(state.fc.firstMax).toISOString() : null,
       riseThresholdCfs: threshold?.cfs ?? null, rain24MeanIn: fullRain ? (state.rains[0].mm + state.rains[1].mm) / 2 / 25.4 : null, rainForecastUpdated1: state.rains[0] ? new Date(state.rains[0].updated).toISOString() : null, rainForecastUpdated2: state.rains[1] ? new Date(state.rains[1].updated).toISOString() : null,
       observedRainIssue: state.observedRain ? new Date(state.observedRain.issued).toISOString() : null, padilla24In: observed24('Padilla Bay Farm'), burlington24In: observed24('Burlington'), sedroWoolley24In: observed24('Sedro-Woolley RAWS'),
       radarProduct: radar.validTime ? RADAR_PRODUCTS[radar.product].label : null, radarValidTime: radar.validTime ? new Date(radar.validTime).toISOString() : null
@@ -446,7 +595,10 @@
   }
   function brief() {
     const observedLines = state.observedRain ? state.observedRain.stations.map(station => station.label + ' rolling 24 h: ' + (station.values[4] === null ? 'Unavailable' : station.values[4].toFixed(2) + ' in.')) : ['Nearby observed-rain report unavailable'];
-    return ['Samish River Outlook — field-planning snapshot', 'Data checked: ' + date(state.now), '', 'RADAR CONTEXT: ' + $('radar-status').textContent, $('radar-frame-time').textContent, $('radar-product-note').textContent, 'Official KATX radar context; not used in a river, closure or safety calculation.', '', 'FORECAST CHANGE CHECK: ' + $('watch-state').textContent, $('watch-title').textContent, $('watch-detail').textContent, $('watch-source').textContent, '', 'Gauge: ' + $('flow').textContent + ' cfs · ' + $('gauge-status').textContent, $('gauge-time').textContent, 'About-24-hour change: ' + $('change24').textContent, 'Near-3-hour change: ' + $('change3').textContent, '', 'SEASONAL RISE COMPARISON: ' + $('rise-status').textContent, $('rise-title').textContent, $('rise-detail').textContent, '', 'NOAA forecast high: ' + $('forecast-high').textContent + ' cfs', $('forecast-time').textContent, $('forecast-coverage').textContent, $('forecast-issue').textContent, $('forecast-revision').textContent, '', $('crest-time').textContent, $('crest-detail').textContent, 'Next 24 h rain, mean of two forecast points: ' + $('rain-total').textContent + ' in. · ' + $('rain-status').textContent, $('rain-note').textContent, ...[...document.querySelectorAll('.rain-point')].map(el => el.innerText), '', 'NEARBY PROVISIONAL OBSERVED RAIN', state.observedRain ? 'Report issued ' + date(state.observedRain.issued) + '; issue time is not a measurement time.' : 'Report unavailable.', ...observedLines, '', 'Tides: Bellingham predictions, ft MLLW; not Samish Bay access clearance.', ...state.tides.map(r => (r.type === 'H' ? 'High ' : 'Low ') + r.v.toFixed(1) + ' ft · ' + date(r.t)), '', 'Official commercial status is not ingested. Check Washington Department of Health.', 'No confirmed crest, dispatch recommendation, closure call, artificial-intelligence warning, all-clear or reopening authorization. Use established procedures; the Department of Health makes closure and reopening decisions.', 'https://doh.wa.gov/commercialshellfishmap', 'https://jdinneen.github.io/samish-river-outlook/'].join('\n');
+    // Only lines the page is showing are copied, so the snapshot never says more than the screen did.
+    const shown = ids => ids.map(id => $(id)).filter(el => !el.hidden && el.textContent).map(el => el.textContent);
+    const upcomingTides = tideList();
+    return ['Samish River Outlook — field-planning snapshot', 'Data checked: ' + date(state.now), '', 'RIVER, measured at the gauge: ' + $('flow').textContent + ' cfs ' + $('river-time').textContent + ($('river-age').textContent ? ', ' + $('river-age').textContent : ''), ...shown(['river-change', 'river-state', 'river-wait', 'river-rain-note', 'river-past', 'river-high', 'river-rise']), '', 'NOAA RIVER FORECAST, current issue against the gauge', ...shown(['noaa-compare', 'noaa-flag']), '', 'TIDE, Bellingham prediction, not Samish Bay water level or boat clearance', $('tide-now').textContent, '', 'RADAR CONTEXT: ' + $('radar-status').textContent, $('radar-frame-time').textContent, $('radar-product-note').textContent, 'Official KATX radar context; not used in a river, closure or safety calculation.', '', 'FORECAST CHANGE CHECK: ' + $('watch-state').textContent, $('watch-title').textContent, $('watch-detail').textContent, $('watch-source').textContent, '', 'WHAT NOAA’S FORECAST ADDS (seasonal rise comparison): ' + $('rise-status').textContent, $('rise-title').textContent, ...shown(['rise-passed']), $('rise-detail').textContent, '', 'NOAA forecast high: ' + $('forecast-high').textContent + ' cfs', $('forecast-time').textContent, $('forecast-coverage').textContent, $('forecast-issue').textContent, $('forecast-revision').textContent, '', $('crest-time').textContent, $('crest-detail').textContent, 'Next 24 h rain, mean of two forecast points: ' + $('rain-total').textContent + ' in. · ' + $('rain-status').textContent, $('rain-note').textContent, ...[...document.querySelectorAll('.rain-point')].map(el => el.innerText), '', 'NEARBY PROVISIONAL OBSERVED RAIN', state.observedRain ? 'Report issued ' + date(state.observedRain.issued) + '; issue time is not a measurement time.' : 'Report unavailable.', ...observedLines, '', 'Tides: Bellingham predictions, ft MLLW; not Samish Bay access clearance.', ...upcomingTides.map(r => (r.type === 'H' ? 'High ' : 'Low ') + feet(r.v) + ' ft · ' + date(r.t) + (r.passed ? ' · passed' : '')), '', 'Official commercial status is not ingested. Check Washington Department of Health.', 'No confirmed crest, dispatch recommendation, closure call, artificial-intelligence warning, all-clear or reopening authorization. Use established procedures; the Department of Health makes closure and reopening decisions.', 'https://doh.wa.gov/commercialshellfishmap', 'https://jdinneen.github.io/samish-river-outlook/'].join('\n');
   }
   $('copy-brief').addEventListener('click', async () => {
     const text = brief();
@@ -540,6 +692,53 @@
     if (!radar.requestedAt || Date.now() - radar.requestedAt > 5 * 60 * 1000) refreshRadar();
     else updateRadarFrame(true);
   });
+  // Research tab: the look-back on past rises. Static text, written once at start-up; every count is read from D.EVIDENCE.
+  function renderLookback() {
+    const all = E.timing.all, dry = E.timing.dry, wait = E.wait, aligned = E.aligned, peak = E.peak2h, fall = E.falling, p = text => '<p>' + esc(text) + '</p>';
+    const card = (key, label, title, body) => '<article class="card" data-evidence="' + key + '"><p class="eyebrow">' + esc(label) + '</p><h3>' + esc(title) + '</h3>' + body + '<p class="note">Period: ' + esc(E[key].period) + '. ' + esc(E.caveat) + '</p><p class="meta">' + esc(E[key].source) + '</p></article>';
+    put('lookback-title', 'What ' + E.rises.count + ' past rises say about the peak');
+    put('lookback-lede', 'Counts from ' + E.rises.count + ' rises at the ' + E.rises.place + ', ' + E.rises.period + ', read from ' + E.rises.readings + ', with three look-backs on forecasts. A rise is counted from the hour its 24-hour rise passed the seasonal number. Every count describes past years: none is a forecast, a chance for the next rise, or a sampling rule.');
+    const waitTable = '<div class="table-wrap lookback-table" role="region" aria-label="Further hours to the highest reading at each stage" tabindex="0"><table><caption>Rises whose highest reading had not yet come, by hours since the seasonal number was passed.</caption><thead><tr><th scope="col">Hours since passed</th><th scope="col">Rises still short of their highest reading</th><th scope="col">Typical further hours (middle value)</th><th scope="col">One rise in four needed at least</th></tr></thead><tbody>' + wait.stagesHours.map((stage, i) => '<tr><td>' + num(stage) + '</td><td>' + num(wait.risesStillWaiting[i]) + '</td><td>' + num(wait.medianMoreHours[i]) + '</td><td>' + num(wait.upperQuartileMoreHours[i]) + '</td></tr>').join('') + '</tbody></table></div>';
+    $('lookback-grid').innerHTML = [
+      card('timing', 'TIMING OF THE HIGHEST READING', 'From the seasonal number to the highest reading',
+        p('Across ' + all.rises + ' rises, the highest reading came a median of ' + halves(all.medianHours) + ' hours after the 24-hour rise passed the seasonal number (the middle value: half took less, half took more). Half of the rises took between ' + halves(all.middleHalfHours[0]) + ' and ' + halves(all.middleHalfHours[1]) + ' hours; ' + all.under2h + ' took under 2 hours and ' + all.atLeast16h + ' of ' + all.rises + ' took 16 hours or more.') +
+        p('In ' + dry.months + ' (' + dry.rises + ' rises) the median was ' + halves(dry.medianHours) + ' hours and half took between ' + halves(dry.middleHalfHours[0]) + ' and ' + halves(dry.middleHalfHours[1]) + ' hours; ' + dry.over8h + ' took more than 8 hours and ' + dry.atLeast16h + ' took 16 hours or more.') +
+        p('The spread is too wide for one clock time, so this page prints no time for the top of a rise.')),
+      card('wait', 'TIME STILL TO GO', 'A long rise is not due to stop',
+        p('For the rises whose highest reading had not yet come, the typical further time to it (the middle value) stayed between ' + halves(wait.typicalWaitHours[0]) + ' and ' + halves(wait.typicalWaitHours[1]) + ' hours at every stage checked, and one rise in four needed ' + halves(wait.oneInFourAtLeastHours) + ' hours or more.') + waitTable),
+      card('pause', 'A ONE-HOUR PAUSE', 'A pause is not a peak',
+        p('The first time each rise went ' + E.pause.afterMinutes + ' minutes of readings with no new high, ' + E.pause.higherAgain + ' of ' + E.pause.rises + ' went higher again within ' + within(E.pause.withinHours) + ', ' + E.pause.higherByMoreThan5Percent + ' of them by more than 5%.')),
+      card('peak2h', 'NO NEW HIGH', num(peak.afterMinutes / 60) + ' hours with no new high',
+        p('The first time each rise went ' + num(peak.afterMinutes / 60) + ' hours of readings with no new high, the river later climbed more than 5% above that high within 12 hours in ' + peak.within12h + ' of ' + peak.rises + ' rises (about 1 in ' + peak.aboutOneIn12h + ') and within 24 hours in ' + peak.within24h + ' (about 1 in ' + peak.aboutOneIn24h + ').')),
+      card('falling', 'OFF THE HIGH', percent(fall.belowHighFraction) + '% below the high',
+        p('The first time each rise read at least ' + percent(fall.belowHighFraction) + '% below its highest reading so far, the river later climbed more than 5% above that high within 12 hours in ' + fall.within12h + ' of ' + fall.rises + ' rises (about 1 in ' + fall.aboutOneIn12h + ') and within 24 hours in ' + fall.within24h + ' (about 1 in ' + fall.aboutOneIn24h + ').')),
+      card('aligned', 'NOAA FORECAST AND THE GAUGE', 'Shifting NOAA’s forecast to the latest gauge reading',
+        p('At the Samish over ' + aligned.period + ' (' + aligned.rises + ' rises), NOAA’s river forecast shifted to start at the latest gauge reading gave ' + aligned.falseAlertEpisodesAligned + ' false-alert episodes against ' + aligned.falseAlertEpisodesAsIssued + ' for the forecast read as issued, with ' + aligned.warned12hEitherWay + ' rises warned ' + aligned.leadHours + ' hours or more ahead either way.') +
+        p('Limit: the shift does nothing for a rise NOAA’s river forecast does not show. This page does not draw the current forecast shifted to the gauge; it says when the gauge is above the forecast instead.')),
+      card('noaaDry', 'NOAA IN THE DRY SEASON', 'NOAA’s river forecast before May to October rises',
+        p(SAY.noaaDry()) + p('A closure-size rise is a 24-hour rise as large as the seasonal number.')),
+      card('rainContext', 'RAIN FORECAST · CONTEXT, NOT AN ALERT', 'Heavy forecast rain in the dry season', p(SAY.rainContext()))
+    ].join('');
+  }
+  // Sources tab: the River, NOAA, tide and rain display rules, written from the rule constants so they cannot drift.
+  function renderRules() {
+    const line = percent(D.WATCH.seasonalFraction), drop = percent(RULES.fallingFraction), rise = percent(RULES.risingFraction);
+    $('river-rules').innerHTML = [
+      'A gauge reading is treated as recent for ' + RULES.freshMinutes + ' minutes. Its clock time and its age are printed beside it. When the newest reading is older than that, or more than ' + RULES.maxGapMinutes + ' minutes of readings are missing inside the last hour, the page prints “Cannot tell whether the river is rising” and shows no change figure and no state.',
+      'Every duration in the River block is counted between gauge reading time stamps, never against this device’s clock. The device’s check time is used only for the age of the newest reading.',
+      'The last-hour change is the newest reading minus the reading nearest one hour earlier, within ' + RULES.lastHourToleranceMinutes + ' minutes either way. It is called “rising” only at +' + RULES.risingCfs + ' cubic feet per second (cfs) and +' + rise + '% or more, “falling” only at −' + RULES.risingCfs + ' cfs and −' + rise + '% or beyond, and “about level” otherwise.',
+      'The measured rise is the newest reading minus the lowest reading of the 24 hours before it. It needs readings reaching back 24 hours with no hole over ' + RULES.maxGapMinutes + ' minutes; otherwise it is shown as unavailable, never as zero or as “no rise”. Its share uses the seasonal number for the Pacific month of the reading.',
+      '“This rise” starts at the first reading of the last ' + RULES.riseMemoryHours + ' hours at which that measured rise reached the seasonal number in force at that reading, and it is remembered for ' + RULES.riseMemoryHours + ' hours of readings. When the earliest reading the page can compare is already past the number, the page says “at or before” and prints no highest reading and no state.',
+      'A new high is any reading strictly higher than every earlier reading of this rise. An equal reading is not a new high.',
+      'State lines: ' + RULES.pauseMinutes + ' minutes of readings with no new high is called a pause; ' + RULES.peakMinutes + ' minutes or more is “may have peaked”; a newest reading at least ' + drop + '% below the high is “falling”. None of these says the top of the rise has passed. A hole over ' + RULES.maxGapMinutes + ' minutes between the high and the newest reading gives no state.',
+      '“Not tracking” sets NOAA’s current forecast issue against the gauge: NOAA’s value for the time of the newest gauge reading, read along a straight line between forecast points no more than 6 hours apart, against that reading. When the gauge is higher by at least ' + line + '% of the seasonal number and a measured rise is in progress, no peak time is read from NOAA’s forecast. This uses no saved history, so it works on a first visit.',
+      'The counts printed beside a state are look-backs on ' + E.rises.count + ' Samish rises of ' + E.rises.period + ' (' + E.rises.readings + '), listed under Research & limits. ' + E.caveat,
+      'The tide block keeps the last high or low after it passes and shows the next two. They are Bellingham predictions, not Samish Bay water levels or boat clearance.',
+      'A six-hour rain block with no value is drawn as a hatched “no data” column, and a block forecast at exactly zero is labelled 0. An observed-rain gauge reading 0.00 inch for 24 hours while both other listed gauges report ' + D.RAIN_RULES.suspectZeroOtherGaugesIn + ' inch or more is marked suspect. The dry-season rain context is shown from May to October only.'
+    ].map(text => '<li>' + esc(text) + '</li>').join('');
+  }
+  renderLookback();
+  renderRules();
   refreshRadar();
   load();
 })();

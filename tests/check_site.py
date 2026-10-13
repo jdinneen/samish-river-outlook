@@ -6,6 +6,7 @@ Nothing here calls scientific models or modifies provider data.
 """
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -92,7 +93,74 @@ def sept29_readings():
     assert max(row['t'] for row in rows) < ms(datetime(2026, 10, 6, tzinfo=timezone.utc))
     return rows
 
-def fixtures():
+# ---- Version 7 page replay: the feeds as the page would have been handed them on 29 September 2026 ----
+# REAL: the gauge readings (sept29_readings) and the Bellingham tide predictions (SEPT29_TIDES).
+# INVENTED: REPLAY_NOAA_PATH and its 8:14 AM issue time. NOAA's actual river forecasts of that day were not
+#   used. The shape only follows the account of that storm: a forecast that never shows the rise, peaking
+#   near 90 cfs around midday (91 cfs at 11:00 AM Pacific) and falling afterwards. Every NOAA figure a replay
+#   frame prints (88.8, 82.3, 80.2, 72.3 cfs and the differences from the gauge) is arithmetic on this
+#   invented path, not a record of what NOAA forecast. The same single issue is served in every frame.
+# INVENTED: the forecast rain, the observed-rain report and the radar frames in a replay frame.
+REPLAY_NOAA_ISSUE = datetime(2026, 9, 29, 8, 14, tzinfo=PACIFIC_DAYLIGHT)
+REPLAY_NOAA_PATH = [
+    ('2026-09-29T06:00:00+00:00', 17), ('2026-09-29T12:00:00+00:00', 26), ('2026-09-29T18:00:00+00:00', 91),
+    ('2026-09-30T00:00:00+00:00', 78), ('2026-09-30T06:00:00+00:00', 61), ('2026-09-30T12:00:00+00:00', 49),
+    ('2026-09-30T18:00:00+00:00', 42), ('2026-10-01T00:00:00+00:00', 37), ('2026-10-01T06:00:00+00:00', 33),
+    ('2026-10-01T12:00:00+00:00', 30), ('2026-10-01T18:00:00+00:00', 28), ('2026-10-02T00:00:00+00:00', 26),
+    ('2026-10-02T06:00:00+00:00', 25), ('2026-10-02T12:00:00+00:00', 24), ('2026-10-02T18:00:00+00:00', 23),
+    ('2026-10-03T00:00:00+00:00', 22), ('2026-10-03T06:00:00+00:00', 21), ('2026-10-03T12:00:00+00:00', 21),
+    ('2026-10-03T18:00:00+00:00', 20)]
+REPLAY_RAIN_MM = [2.54, 1.27, 0.51, 0, 0, 0, 0]   # invented six-hour forecast amounts from the check time
+
+def pacific(day, hour, minute=0):
+    """A Pacific daylight time on September `day`, 2026 (day 30 is 30 September)."""
+    return datetime(2026, 9, day, hour, minute, tzinfo=PACIFIC_DAYLIGHT)
+
+def replay_payload(check, newest=None, first=None, hole=None, noaa_path=None, noaa_issue=None, rain_mm=None, rrm_rows=None, tides=None):
+    """Every feed as the page would be handed it at `check`, the fixed device clock of a replay frame.
+
+    newest   the newest gauge reading served. Default: the top of the hour at or before `check`, so a page
+             opened at 7:20 PM holds the 7:00 PM reading, 20 minutes old.
+    first    drop every reading before this time (shortens the history the page can compare).
+    hole     (start, end): drop the readings from start to end inclusive.
+    """
+    newest = newest or check.replace(minute=0, second=0, microsecond=0)
+    stamp = lambda moment: moment.astimezone(timezone.utc).isoformat()
+    ms = lambda moment: int(moment.timestamp() * 1000)
+    readings = [row for row in sept29_readings() if row['t'] <= ms(newest)
+                and (first is None or row['t'] >= ms(first))
+                and (hole is None or not ms(hole[0]) <= row['t'] <= ms(hole[1]))]
+    when = lambda row: datetime.fromtimestamp(row['t'] / 1000, timezone.utc).isoformat()
+    flow = lambda rows, issued: {'primaryName': 'River Discharge', 'primaryUnits': 'cfs', 'secondaryName': 'Stage',
+                                 'secondaryUnits': 'ft', 'issuedTime': issued, 'data': rows}
+    issue = stamp(noaa_issue or REPLAY_NOAA_ISSUE)
+    amounts = REPLAY_RAIN_MM if rain_mm is None else rain_mm
+    gauges = rrm_rows or ['Padilla Bay Farm 0.01 0.02 0.05 0.10 0.20 0.30 0.40', 'Burlington 0.00 0.01 0.03 0.08 0.18 0.28 0.38',
+                          'Sedro Wooley RAWS M 0.02 0.04 0.09 0.19 0.29 0.39']
+    radar_times = ','.join(stamp(check - timedelta(minutes=minutes)) for minutes in [45, 30, 15])
+    base = fixtures(check)
+    return {
+        'nwps': {'observed': flow([{'validTime': when(row), 'primary': row['q'], 'secondary': 4} for row in readings], issue),
+                 'forecast': flow([{'validTime': t, 'primary': q, 'secondary': 4} for t, q in (noaa_path or REPLAY_NOAA_PATH)], issue)},
+        'usgs': {'features': [{'properties': {'monitoring_location_id': 'USGS-12201500', 'parameter_code': '00060',
+                 'time': when(row), 'value': str(row['q']), 'unit_of_measure': 'ft^3/s'},
+                 'geometry': {'type': 'Point', 'coordinates': [-122.3382169, 48.54594127]}} for row in readings]},
+        # Rain blocks start exactly at the check time, so each six-hour block on the page is one value here.
+        'rain': {'properties': {'updateTime': stamp(check - timedelta(hours=1)), 'quantitativePrecipitation': {
+                 'uom': 'wmoUnit:mm', 'values': [{'validTime': stamp(check + timedelta(hours=6 * i)) + '/PT6H', 'value': mm}
+                                                 for i, mm in enumerate(amounts)]}}, 'geometry': base['rain']['geometry']},
+        'rrm_index': {'@graph': [{'id': '123e4567-e89b-42d3-a456-426614174000', 'issuanceTime': stamp(check - timedelta(minutes=30))}]},
+        'rrm': {'id': '123e4567-e89b-42d3-a456-426614174000', 'issuanceTime': stamp(check - timedelta(minutes=30)), 'productCode': 'RRM',
+                'issuingOffice': 'KSEW', 'productText': '000\nRRMSEW\nNational Weather Service Seattle WA\n\n' + '\n'.join(gauges) + '\n'},
+        'basin': base['basin'],
+        'capabilities': '<?xml version="1.0"?><WMS_Capabilities xmlns="http://www.opengis.net/wms"><Capability><Layer>' + ''.join(
+            f'<Layer><Name>{layer}</Name><Dimension name="time">{radar_times}</Dimension></Layer>'
+            for layer in ['katx_sr_bref', 'katx_boha', 'katx_bdsa']) + '</Layer></Capability></WMS_Capabilities>',
+        'tides': SEPT29_TIDES if tides is None else tides}
+
+def fixtures(now=None):
+    """Synthetic feeds around `now` (default: the moment the suite started)."""
+    ISO = lambda h=0: ((now or NOW) + timedelta(hours=h)).isoformat()
     def series(rows):
         return {'primaryName': 'River Discharge', 'primaryUnits': 'kcfs',
                 'secondaryName': 'Stage', 'secondaryUnits': 'ft',
@@ -108,7 +176,7 @@ def fixtures():
     rrm_text = f"""000
 RRMSEW
 National Weather Service Seattle WA
-{NOW.strftime('%H%M %p %a %b %d %Y')}
+{(now or NOW).strftime('%H%M %p %a %b %d %Y')}
 
 Padilla Bay Farm 0.01 0.02 0.05 0.10 0.20 0.30 0.40
 Burlington 0.00 0.01 0.03 0.08 0.18 0.28 0.38
@@ -126,8 +194,9 @@ Sedro Wooley RAWS M 0.02 0.04 0.09 0.19 0.29 0.39
         'rrm': {'id': '123e4567-e89b-42d3-a456-426614174000', 'issuanceTime': ISO(-.5), 'productCode': 'RRM', 'issuingOffice': 'KSEW', 'productText': rrm_text},
         'basin': {'type': 'FeatureCollection', 'features': [{'type': 'Feature', 'geometry': {'type': 'Polygon', 'coordinates': [[[-122.46, 48.53], [-122.18, 48.53], [-122.16, 48.70], [-122.40, 48.71], [-122.46, 48.53]]]}, 'properties': {}}]},
         'capabilities': capabilities,
-        'tides': {'predictions': [{'t': (NOW + timedelta(hours=h)).strftime('%Y-%m-%d %H:%M'),
-                  'v': str(v), 'type': typ} for h, v, typ in [(2, 8, 'H'), (8, -1, 'L'), (14, 9, 'H'), (20, 1, 'L')]]}}
+        # The low four hours back is the extreme that just passed; the page must keep it.
+        'tides': {'predictions': [{'t': ((now or NOW) + timedelta(hours=h)).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M'),
+                  'v': str(v), 'type': typ} for h, v, typ in [(-4, 2, 'L'), (2, 8, 'H'), (8, -1, 'L'), (14, 9, 'H'), (20, 1, 'L')]]}}
 
 def saved_snapshot(expected=80):
     points = [NOW + timedelta(hours=h) for h in range(-6, 67, 6)]
@@ -148,8 +217,12 @@ with sync_playwright() as p:
     original_forecast = json.loads(json.dumps(payload['nwps']['forecast']))
     mode = {'fail': False, 'direct_fail': False, 'radar_fail': False, 'radar_layer_fail': None, 'radar_legend_fail': False, 'rrm_fail': False, 'basin_fail': False, 'basin_malformed_once': False, 'grid_geometry_fail': False, 'grid_outside_basin': False}
 
-    def route(req):
+    def serve(req, source=None):
+        # `source` lets a replay page be served its own feeds and record the addresses it asked for.
+        data = source['payload'] if source else payload
         u = req.request.url
+        if source is not None and '127.0.0.1' not in u and 'localhost' not in u:
+            source.setdefault('requests', []).append(u)
         if '127.0.0.1' in u or 'localhost' in u:
             return req.continue_()
         parsed = urlparse(u)
@@ -159,7 +232,7 @@ with sync_playwright() as p:
             if mode['fail'] or mode['radar_fail']:
                 return req.fulfill(status=503, body='Radar unavailable')
             if request == 'getcapabilities':
-                return req.fulfill(status=200, content_type='application/xml', body=payload['capabilities'], headers={'Access-Control-Allow-Origin': '*'})
+                return req.fulfill(status=200, content_type='application/xml', body=data['capabilities'], headers={'Access-Control-Allow-Origin': '*'})
             if request == 'getmap' and mode['radar_layer_fail'] in query.get('layers', []):
                 return req.fulfill(status=200, content_type='application/xml', body='<ServiceException>synthetic layer failure</ServiceException>', headers={'Access-Control-Allow-Origin': '*'})
             if request == 'getlegendgraphic' and mode['radar_legend_fail']:
@@ -174,27 +247,31 @@ with sync_playwright() as p:
             if mode['basin_malformed_once']:
                 mode['basin_malformed_once'] = False
                 return req.fulfill(status=200, content_type='application/json', body='{}', headers={'Access-Control-Allow-Origin': '*'})
-            return req.fulfill(status=200, content_type='application/json', body=json.dumps(payload['basin']), headers={'Access-Control-Allow-Origin': '*'})
+            return req.fulfill(status=200, content_type='application/json', body=json.dumps(data['basin']), headers={'Access-Control-Allow-Origin': '*'})
         if 'api.weather.gov/products/types/RRM/locations/SEW' in u:
             if mode['fail'] or mode['rrm_fail']:
                 return req.fulfill(status=503, body='Rain report unavailable')
-            return req.fulfill(status=200, content_type='application/json', body=json.dumps(payload['rrm_index']), headers={'Access-Control-Allow-Origin': '*'})
+            return req.fulfill(status=200, content_type='application/json', body=json.dumps(data['rrm_index']), headers={'Access-Control-Allow-Origin': '*'})
         if 'api.weather.gov/products/123e4567-e89b-42d3-a456-426614174000' in u:
             if mode['fail'] or mode['rrm_fail']:
                 return req.fulfill(status=503, body='Rain report unavailable')
-            return req.fulfill(status=200, content_type='application/json', body=json.dumps(payload['rrm']), headers={'Access-Control-Allow-Origin': '*'})
+            return req.fulfill(status=200, content_type='application/json', body=json.dumps(data['rrm']), headers={'Access-Control-Allow-Origin': '*'})
         if mode['fail'] or mode['direct_fail'] and 'waterdata.usgs.gov' in u:
             return req.fulfill(status=503, body='Unavailable')
         if 'api.weather.gov/gridpoints/' in u and mode['grid_geometry_fail']:
-            bad_grid = json.loads(json.dumps(payload['rain']))
+            bad_grid = json.loads(json.dumps(data['rain']))
             bad_grid.pop('geometry', None)
             return req.fulfill(status=200, content_type='application/json', body=json.dumps(bad_grid), headers={'Access-Control-Allow-Origin': '*'})
         if 'api.weather.gov/gridpoints/SEW/139,116' in u and mode['grid_outside_basin']:
-            bad_grid = json.loads(json.dumps(payload['rain']))
+            bad_grid = json.loads(json.dumps(data['rain']))
             bad_grid['geometry'] = {'type': 'Polygon', 'coordinates': [[[-122.13, 48.58], [-122.09, 48.58], [-122.09, 48.61], [-122.13, 48.61], [-122.13, 48.58]]]}
             return req.fulfill(status=200, content_type='application/json', body=json.dumps(bad_grid), headers={'Access-Control-Allow-Origin': '*'})
         key = 'nwps' if '/nwps/' in u else 'usgs' if 'waterdata.usgs.gov' in u else 'rain' if 'api.weather.gov/gridpoints/' in u else 'tides'
-        req.fulfill(status=200, content_type='application/json', body=json.dumps(payload[key]), headers={'Access-Control-Allow-Origin': '*'})
+        req.fulfill(status=200, content_type='application/json', body=json.dumps(data[key]), headers={'Access-Control-Allow-Origin': '*'})
+
+    def route(req):
+        # One argument only: the browser driver hands a two-argument handler the request as well.
+        return serve(req)
 
     page.route('**/*', route)
     page.goto(URL)
@@ -209,18 +286,19 @@ with sync_playwright() as p:
     if axe_path:
         page.add_script_tag(path=axe_path)
 
-    def audit_state(label, tabs=('outlook',)):
+    def audit_page(target, label, tabs=('outlook',)):
+        """Accessibility audit of `target` in light and dark; returns the number of audits run."""
         if not axe_path:
             return 0
-        if not page.evaluate("typeof axe !== 'undefined'"):
-            page.add_script_tag(path=axe_path)
+        if not target.evaluate("typeof axe !== 'undefined'"):
+            target.add_script_tag(path=axe_path)
         runs = 0
         for scheme in ['light', 'dark']:
-            page.emulate_media(color_scheme=scheme)
-            page.wait_for_timeout(250)
+            target.emulate_media(color_scheme=scheme)
+            target.wait_for_timeout(250)
             for tab in tabs:
-                page.locator('#tab-' + tab).click()
-                audit = page.evaluate("""async () => await axe.run(document, {
+                target.locator('#tab-' + tab).click()
+                audit = target.evaluate("""async () => await axe.run(document, {
                     runOnly: {type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']}
                 })""")
                 assert not audit['violations'], {
@@ -228,8 +306,11 @@ with sync_playwright() as p:
                     'violations': [(v['id'], v['impact'], [(n['target'], n['failureSummary']) for n in v['nodes']]) for v in audit['violations']]
                 }
                 runs += 1
-        page.locator('#tab-outlook').click()
+        target.locator('#tab-outlook').click()
         return runs
+
+    def audit_state(label, tabs=('outlook',)):
+        return audit_page(page, label, tabs)
 
     def screenshot_state(label):
         for scheme in ['light', 'dark']:
@@ -720,7 +801,21 @@ with sync_playwright() as p:
     assert page.locator('#radar-basin-note').is_hidden()
     assert page.locator('#radar-overlay .rain-marker text').evaluate_all("els => { const a=els[0].getBoundingClientRect(), b=els[1].getBoundingClientRect(); return a.bottom <= b.top || b.bottom <= a.top || a.right <= b.left || b.right <= a.left; }")
     assert 'valid' in page.locator('#radar-frame-time').inner_text()
-    assert page.locator('#ops-flow').inner_text() == '101'
+    # Version 7: the River block replaces the strip's "River now" and "About 3-hour change" tiles.
+    assert page.locator('#river-block #flow').inner_text() == '101'
+    assert page.locator('#river-time').inner_text().startswith('at ') and page.locator('#river-time').inner_text().endswith(('PDT', 'PST'))
+    assert re.fullmatch(r'\d+ minutes? old', page.locator('#river-age').inner_text())
+    assert page.locator('#river-change').inner_text() == 'Last hour: +2 cfs (rising). About 3 hours: +4 cfs.'
+    assert re.fullmatch(r'Rise above the 24-hour low: 25 cfs \(\d+% of the \d+ cfs \S+ number; low 76 cfs at .+ P[DS]T\)\.', page.locator('#river-rise').inner_text())
+    for ident in ['river-state', 'river-wait', 'river-rain-note', 'river-past', 'river-high']:
+        assert page.locator('#' + ident).is_hidden(), ident   # no rise in progress: no state and no "high" language
+    assert page.locator('#river-announce').inner_text() == ''   # nothing is announced on a first load
+    assert re.fullmatch(r'NOAA’s river forecast, issued .+ P[DS]T \(1 hour ago\), has 126 cfs for .+ P[DS]T\. The gauge read 101 cfs then: 25 cfs lower\.', page.locator('#noaa-compare').inner_text())
+    assert page.locator('#noaa-flag').is_hidden()
+    assert re.fullmatch(r'Low of 2\.0 ft was at .+ P[DS]T, 4 h [01] min before this check\. The tide is rising to a high of 8\.0 ft at .+ P[DS]T, then a low of -1\.0 ft at .+ P[DS]T\.', page.locator('#tide-now').inner_text())
+    assert page.locator('#tide-list .tide-row').count() == 5 and 'passed' in page.locator('#tide-list .tide-row').first.inner_text()
+    assert re.fullmatch(r'within the available path · issued .+ P[DS]T', page.locator('#ops-forecast-note').inner_text())
+    assert page.locator('.ops-strip > div').count() == 3
     assert page.locator('#ops-threshold').inner_text().endswith('cfs')
     assert page.locator('#flow-chart').evaluate("el => el.getBoundingClientRect().top < document.getElementById('surprise-watch').getBoundingClientRect().top")
     assert page.locator('#radar-loop').evaluate("el => el.getBoundingClientRect().top < document.getElementById('surprise-watch').getBoundingClientRect().top")
@@ -728,6 +823,496 @@ with sync_playwright() as p:
     assert 'largest rise relative to the seasonal reference' in page.locator('#rise-detail').inner_text().lower()
     assert page.locator('#saved-path-legend').is_hidden()
     assert page.locator('#flow-chart path[stroke="var(--saved)"]').count() == 0
+    # ------------------------------------------------------------------------------------------------------
+    # Version 7 page checks. The rise of 29 September 2026 is replayed through the page with the device clock
+    # fixed, so each sentence asserted below is what a visitor would have read at that moment. The gauge
+    # readings and the tide predictions are real. NOAA's forecast path, the rain and the radar are INVENTED
+    # (see REPLAY_NOAA_PATH above). A page opened at 7:20 PM holds the 7:00 PM reading, 20 minutes old.
+    # ------------------------------------------------------------------------------------------------------
+    EVIDENCE = page.evaluate('SamishData.EVIDENCE')
+    RULES = page.evaluate('SamishData.RIVER_RULES')
+    half = lambda n: str(int(n)) if float(n).is_integer() else (str(int(n)) if int(n) else '') + '½'
+    # The sentences that carry a count, rebuilt here from the evidence object. The page must print exactly these.
+    E_WAIT, E_PAUSE, E_PEAK, E_FALL, E_DRY, E_RAIN = (EVIDENCE[key] for key in ['wait', 'pause', 'peak2h', 'falling', 'noaaDry', 'rainContext'])
+    WAIT = (f"However long the river has already been rising, the typical wait to the top in past rises was still {half(E_WAIT['typicalWaitHours'][0])} to "
+            f"{half(E_WAIT['typicalWaitHours'][1])} hours, and one rise in four needed {half(E_WAIT['oneInFourAtLeastHours'])} hours or more. A long rise is not due to stop.")
+    PAUSE = (f"A pause is not a peak: after a one-hour pause, {E_PAUSE['higherAgain']} of {E_PAUSE['rises']} past rises went higher again within a day, "
+             f"{E_PAUSE['higherByMoreThan5Percent']} of them by more than 5%.")
+    PEAK = (f"Of {E_PEAK['rises']} past rises that went 2 hours without a new high, the river later climbed more than 5% above that high within 12 hours in "
+            f"{E_PEAK['within12h']} (about 1 in {E_PEAK['aboutOneIn12h']}) and within 24 hours in {E_PEAK['within24h']} (about 1 in {E_PEAK['aboutOneIn24h']}).")
+    FALLING = (f"Of {E_FALL['rises']} past rises that reached this point, the river later climbed more than 5% above that high within 12 hours in "
+               f"{E_FALL['within12h']} (about 1 in {E_FALL['aboutOneIn12h']}) and within 24 hours in {E_FALL['within24h']} (about 1 in {E_FALL['aboutOneIn24h']}).")
+    NOAA_DRY = (f"NOAA’s river forecast, read hour by hour, showed a closure-size rise {E_DRY['leadHours']} or more hours ahead for {E_DRY['shown12hAhead']} of "
+                f"{E_DRY['rises']} {E_DRY['period']}, and not for {E_DRY['notShown']}, among them {E_DRY['notShownIncludes']}.")
+    RAIN_CONTEXT = (f"In a look-back over the {E_RAIN['period']}, the river forecast centre’s rain forecast for this basin reached {E_RAIN['thresholdIn']} inch or more in "
+                    f"{E_RAIN['windowHours']} hours about {E_RAIN['perSeason']} times a season. About half of those times ({E_RAIN['followed']} of {E_RAIN['occasions']}) the river "
+                    f"then rose by {E_RAIN['riseCfs']} cubic feet per second or more within a day and a half. When NOAA’s river forecast showed no such rise and the rain "
+                    f"forecast was that high, a rise followed about 1 time in {E_RAIN['aboutOneInWithNoNoaaRise']} ({E_RAIN['withNoNoaaRiseFollowed']} of {E_RAIN['withNoNoaaRise']}). "
+                    f"Rain that high was in the forecast {E_RAIN['leadHours']} or more hours ahead of {E_RAIN['ofThoseRainForecastAhead']} of the {E_RAIN['risesNoaaDidNotShow']} "
+                    f"dry-season rises that NOAA’s river forecast did not show, all four in {E_RAIN['aheadYears']}, including {E_RAIN['aheadIncludes']}. Less rain than this is "
+                    f"not an all-clear: {E_RAIN['risesWithLessRain']} of {E_RAIN['risesWithForecast']} rises came with less. These counts are for a different rain forecast from "
+                    "the two points shown here and have not been checked against them.")
+    CAVEAT = EVIDENCE['caveat']
+    # The same sentences with the numbers written out, as the page is meant to print them. If the evidence
+    # object drifted, these fail even though the page and the object would still agree with each other.
+    assert WAIT == 'However long the river has already been rising, the typical wait to the top in past rises was still 3½ to 7 hours, and one rise in four needed 8 hours or more. A long rise is not due to stop.'
+    assert PAUSE == 'A pause is not a peak: after a one-hour pause, 67 of 172 past rises went higher again within a day, 42 of them by more than 5%.'
+    assert PEAK == 'Of 172 past rises that went 2 hours without a new high, the river later climbed more than 5% above that high within 12 hours in 19 (about 1 in 9) and within 24 hours in 30 (about 1 in 6).'
+    assert FALLING == 'Of 172 past rises that reached this point, the river later climbed more than 5% above that high within 12 hours in 10 (about 1 in 17) and within 24 hours in 21 (about 1 in 8).'
+    assert NOAA_DRY == 'NOAA’s river forecast, read hour by hour, showed a closure-size rise 12 or more hours ahead for 25 of 32 May to October rises of 2018 to 2026, and not for 7, among them 29 September 2026.'
+    assert RAIN_CONTEXT == ('In a look-back over the dry seasons of 2018 to 2026, the river forecast centre’s rain forecast for this basin reached 0.75 inch or more in 24 hours about 5 times a season. '
+                            'About half of those times (23 of 45) the river then rose by 100 cubic feet per second or more within a day and a half. When NOAA’s river forecast showed no such rise '
+                            'and the rain forecast was that high, a rise followed about 1 time in 4 (7 of 26). Rain that high was in the forecast 12 or more hours ahead of 4 of the 7 dry-season '
+                            'rises that NOAA’s river forecast did not show, all four in 2024 to 2026, including 29 September 2026. Less rain than this is not an all-clear: 10 of 32 rises came '
+                            'with less. These counts are for a different rain forecast from the two points shown here and have not been checked against them.')
+    assert CAVEAT == 'A look-back on past years, not a forecast.'
+    RAIN_BESIDE_PAUSE = ('If rain is still falling over the basin on radar, a pause is less likely to be the peak. Rain stopping does not mean the river has peaked: '
+                         'on 29 September 2026 the rain ended about 2 pm and the river kept rising until 9 to 10 pm.')
+    NOT_TRACKING = 'NOAA’s forecast is not tracking this rise. Do not read a peak time from it.'
+    NO_PEAK_TIME = 'No peak time is read from NOAA’s forecast while the gauge is above it.'
+    RISE_UNTOLD = 'Whether a measured rise is in progress cannot be told from the gauge record. ' + NO_PEAK_TIME
+    past = lambda since: f'Past the 100 cfs May–October number since the {since} reading. This page’s arithmetic, not the Department of Health’s decision.'
+    rise_line = lambda cfs, share, low: f'Rise above the 24-hour low: {cfs} cfs ({share}% of the 100 cfs May–October number; low {low}).'
+    noaa_line = lambda issued, age, value, at, gauge, gap: f'NOAA’s river forecast, issued {issued} ({age} ago), has {value} cfs for {at}. The gauge read {gauge} cfs then: {gap} cfs higher.'
+
+    # No count that lives in the evidence object may be typed into the page's own files: the sentences are
+    # assembled from the object, so these strings can appear only in data.js.
+    page_sources = {name: (ROOT / name).read_text(encoding='utf-8') for name in ['index.html', 'app.js']}
+    for name, text in page_sources.items():
+        for typed in ['172', '67 of', '42 of', '23 of 45', '7 of 26', '25 of 32', '10 of 32', '4 of the 7', '29 false', 'in 19 (', 'in 30 (', 'in 10 (', 'in 21 (', '3½', '5½', '0.75 inch']:
+            assert typed not in text, (name, 'a look-back count is typed into the page instead of read from the evidence object', typed)
+        assert 'backtest' not in text.lower(), (name, 'the removed data file is still mentioned')
+    assert not (ROOT / 'backtest.js').exists(), 'backtest.js must not be published'
+    assert 'backtest' not in (ROOT / 'README.md').read_text(encoding='utf-8').lower()
+    # The page names no grower: the two places that did now use neutral wording.
+    assert page.locator('.cross-check > strong').first.inner_text() == 'Other views used alongside this page'
+    assert 'the kind of divergence a grower described.' in page_sources['index.html'] and ' uses</strong>' not in page_sources['index.html']
+
+    # Words that must not appear on the Outlook tab . ALLOWED lists the exact phrases the
+    # specification itself puts there, plus two version 6 disclaimers that deny the banned meaning; each is
+    # removed before the scan, so any other use of a banned word fails.
+    BANNED = ['crested', 'final', 'all clear', 'safe', 'has not happened', 'wait', 'go now', 'peaked']
+    ALLOWED = ['may have peaked',                              # the one permitted use of "peaked"
+               'does not mean the river has peaked',           # the rain sentence printed beside a pause
+               'the typical wait to the top',                  # the no-countdown sentence
+               'is not an all-clear',                          # the dry-season rain context paragraph
+               'not a closure, safety, or all-clear signal',   # version 6 disclaimer on the forecast-change check
+               'closure, or all-clear recommendation']         # version 6 planning-limit disclaimer
+    def banned_words(text):
+        flat = lambda value: ' '.join(value.lower().replace('-', ' ').split())
+        scan = flat(text)
+        for phrase in ALLOWED:
+            scan = scan.replace(flat(phrase), ' ')
+        return [word for word in BANNED if re.search(r'\b' + re.escape(word) + r'\b', scan)]
+    assert banned_words('The river crested at 9 PM and it is safe; all-clear, please wait, go now. The peak is final and has not happened.') == ['crested', 'final', 'all clear', 'safe', 'has not happened', 'wait', 'go now']
+    assert banned_words('The river peaked at 191 cfs.') == ['peaked'] and banned_words('The river may have peaked at 191 cfs.') == []
+    assert banned_words('Waiting for a gauge reading. Not a closure, safety, or all-clear signal.') == []
+
+    def settle(target):
+        target.wait_for_function("!document.getElementById('refresh').disabled")
+        target.wait_for_function("['Latest retrieved frame','Animating retrieved frames','Unavailable'].includes(document.getElementById('radar-status').textContent)")
+
+    def open_frame(check, width=1440, height=1000, scheme='light', feeds_payload=None, **feeds):
+        """A first visit at `check`: a device with nothing saved, its clock fixed at that moment."""
+        frame_context = browser.new_context(viewport={'width': width, 'height': height}, color_scheme=scheme)
+        frame_context.clock.set_fixed_time(check)
+        source = {'payload': feeds_payload or replay_payload(check, **feeds), 'requests': []}
+        frame = frame_context.new_page()
+        frame.on('pageerror', lambda e: errors.append(str(e)))
+        frame.route('**/*', lambda req: serve(req, source))
+        frame.goto(URL)
+        settle(frame)
+        assert frame.evaluate('Date.now()') == int(check.timestamp() * 1000), 'the device clock must be fixed at the frame time'
+        return frame_context, frame, source
+
+    said = lambda target, ident: target.locator('#' + ident).inner_text()
+    def river_lines(target):
+        """The visible lines of the River, NOAA and Tide blocks; a hidden line is None."""
+        ids = ['flow', 'river-time', 'river-age', 'river-change', 'river-state', 'river-wait', 'river-rain-note', 'river-past', 'river-high', 'river-rise', 'noaa-compare', 'noaa-flag', 'tide-now']
+        return {ident: (None if target.locator('#' + ident).is_hidden() else said(target, ident)) for ident in ids}
+    def block_style(target):
+        """Every colour and class of the three blocks. It must be identical in every state."""
+        return target.evaluate("""() => ['river-block','noaa-block','tide-block','flow','river-state','river-change','noaa-flag','noaa-compare','tide-now'].map(id => {
+          const el = document.getElementById(id), s = getComputedStyle(el);
+          return [id, el.className, s.color, s.backgroundColor, s.borderTopColor, s.borderLeftColor, s.fontWeight, s.textDecorationLine].join('|');
+        })""")
+    def first_screen(target, ids=('flow', 'river-time', 'river-age', 'river-change')):
+        """Each element's box and type size, with the page not scrolled."""
+        return target.evaluate("""ids => ({scrollY, innerWidth, innerHeight, overflow: document.documentElement.scrollWidth > innerWidth, boxes: ids.map(id => {
+          const el = document.getElementById(id), r = el.getBoundingClientRect();
+          return {id, top: r.top, bottom: r.bottom, left: r.left, right: r.right, height: r.height, size: parseFloat(getComputedStyle(el).fontSize)};
+        })})""", list(ids))
+    def assert_first_screen(target, label, ids=('flow', 'river-time', 'river-age', 'river-change')):
+        view = first_screen(target, ids)
+        assert view['scrollY'] == 0 and not view['overflow'], (label, 'scrolled or overflowing', view)
+        for box in view['boxes']:
+            assert box['height'] > 0 and box['top'] >= 0 and box['left'] >= 0 and box['bottom'] <= view['innerHeight'] and box['right'] <= view['innerWidth'], (label, 'not fully visible without scrolling', box, view['innerHeight'])
+            assert box['size'] >= (32 if box['id'] == 'flow' else 15), (label, 'type too small', box)
+    largest_type = """() => {
+      const flow = parseFloat(getComputedStyle(document.getElementById('flow')).fontSize); let max = 0, who = '';
+      for (const el of document.querySelectorAll('body *')) {
+        if (el.id === 'flow' || !el.checkVisibility() || ![...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())) continue;
+        const size = parseFloat(getComputedStyle(el).fontSize);
+        if (size > max) { max = size; who = el.tagName + '#' + el.id + '.' + el.className; }
+      }
+      return {flow, max, who};
+    }"""
+
+    # ---- The replay frames: readings through the top of the hour, plus one extra frame at 4:35 PM ----
+    evening_tide = lambda since: f'High of 8.2 ft was at 6:46 PM PDT, {since} before this check. The tide is falling to a low of -1.2 ft at Sep 30, 1:56 AM PDT, then a high of 7.8 ft at Sep 30, 9:13 AM PDT.'
+    afternoon_tide = lambda since: f'Low of 4.6 ft was at 1:21 PM PDT, {since} before this check. The tide is rising to a high of 8.2 ft at 6:46 PM PDT, then a low of -1.2 ft at Sep 30, 1:56 AM PDT.'
+    low_at_1am = '15.9 cfs at 1:00 AM PDT'
+    FRAMES = [
+        dict(name='1220pm', check=pacific(29, 12, 20), state_code='new-high', flow='119', time='at 12:00 PM PDT',
+             change='Last hour: +21.5 cfs (rising). About 3 hours: +56.5 cfs.',
+             state='Still rising as of 12:00 PM PDT (reading 20 minutes old): 119 cfs is the highest of this rise so far, up 21.5 cfs in the hour before. The top of this rise is at this reading or later.',
+             since='12:00 PM PDT', high='Highest reading since then: 119 cfs at 12:00 PM PDT.', rise=rise_line('103.1', 103, low_at_1am),
+             noaa=noaa_line('8:14 AM PDT', '4 hours', '88.8', '12:00 PM PDT', '119', '30.2'),
+             tide='High of 7.8 ft was at 8:08 AM PDT, 4 h 12 min before this check. The tide is falling to a low of 4.6 ft at 1:21 PM PDT, then a high of 8.2 ft at 6:46 PM PDT.'),
+        dict(name='0320pm', check=pacific(29, 15, 20), state_code='just-off-high', flow='163', time='at 3:00 PM PDT',
+             change='Last hour: +6 cfs (rising). About 3 hours: +44 cfs.',
+             # 163 cfs was first read at 2:45 PM; the 3:00 PM reading only equals it, and a tie is not a new high.
+             state='Highest reading of this rise: 163 cfs at 2:45 PM PDT, 15 minutes of readings before the newest one.',
+             since='12:00 PM PDT', high='Highest reading since then: 163 cfs at 2:45 PM PDT.', rise=rise_line('147.1', 147, low_at_1am),
+             noaa=noaa_line('8:14 AM PDT', '7 hours', '82.3', '3:00 PM PDT', '163', '80.7'), tide=afternoon_tide('1 h 59 min')),
+        dict(name='0420pm', check=pacific(29, 16, 20), state_code='just-off-high', flow='164', time='at 4:00 PM PDT',
+             change='Last hour: +1 cfs (about level). About 3 hours: +27 cfs.',
+             state='Highest reading of this rise: 164 cfs at 3:15 PM PDT, 45 minutes of readings before the newest one.',
+             since='12:00 PM PDT', high='Highest reading since then: 164 cfs at 3:15 PM PDT.', rise=rise_line('148.1', 148, low_at_1am),
+             noaa=noaa_line('8:14 AM PDT', '8 hours', '80.2', '4:00 PM PDT', '164', '83.8'), tide=afternoon_tide('2 h 59 min')),
+        # The extra frame: opened at 4:35 PM holding the 4:15 PM reading, exactly 60 minutes of
+        # readings after the 3:15 PM high, so the state is a pause. The river then went on from 164 to 191 cfs.
+        dict(name='0435pm', check=pacific(29, 16, 35), newest=pacific(29, 16, 15), state_code='paused', flow='164', time='at 4:15 PM PDT',
+             change='Last hour: 0 cfs (about level). About 3 hours: +22 cfs.',
+             state='No new high since 3:15 PM PDT. ' + PAUSE,
+             since='12:00 PM PDT', high='Highest reading since then: 164 cfs at 3:15 PM PDT.', rise=rise_line('148.1', 148, low_at_1am),
+             noaa=noaa_line('8:14 AM PDT', '8 hours', '79.6', '4:15 PM PDT', '164', '84.4'), tide=afternoon_tide('3 h 14 min')),
+        dict(name='0720pm', check=pacific(29, 19, 20), state_code='new-high', flow='181', time='at 7:00 PM PDT',
+             change='Last hour: +7 cfs (rising). About 3 hours: +17 cfs.',
+             state='Still rising as of 7:00 PM PDT (reading 20 minutes old): 181 cfs is the highest of this rise so far, up 7 cfs in the hour before. The top of this rise is at this reading or later.',
+             since='12:00 PM PDT', high='Highest reading since then: 181 cfs at 7:00 PM PDT.', rise=rise_line('165.1', 165, low_at_1am),
+             noaa=noaa_line('8:14 AM PDT', '11 hours', '72.3', '7:00 PM PDT', '181', '108.7'),
+             tide=evening_tide('34 minutes')),   # the 6:46 PM high passed 34 minutes earlier and is still shown
+        dict(name='1020pm', check=pacific(29, 22, 20), state_code='paused', flow='191', time='at 10:00 PM PDT',
+             change='Last hour: 0 cfs (about level). About 3 hours: +10 cfs.',
+             state='No new high since 9:00 PM PDT. ' + PAUSE,
+             since='12:00 PM PDT', high='Highest reading since then: 191 cfs at 9:00 PM PDT.', rise=rise_line('175.1', 175, low_at_1am),
+             noaa=noaa_line('8:14 AM PDT', '14 hours', '63.8', '10:00 PM PDT', '191', '127.2'), tide=evening_tide('3 h 34 min')),
+        dict(name='1120pm', check=pacific(29, 23, 20), state_code='may-have-peaked', flow='189', time='at 11:00 PM PDT',
+             change='Last hour: -2 cfs (about level). About 3 hours: +2 cfs.',
+             state='No new high since 9:00 PM PDT (2 h 0 min of readings): the river may have peaked at 191 cfs. ' + PEAK,
+             since='12:00 PM PDT', high='Highest reading since then: 191 cfs at 9:00 PM PDT.', rise=rise_line('173.1', 173, low_at_1am),
+             noaa=noaa_line('8:14 AM PDT', '15 hours', '61', '11:00 PM PDT', '189', '128'), tide=evening_tide('4 h 34 min')),
+        # The next morning: the measured rise is back under 100 cfs, but the number was passed 20 hours earlier.
+        dict(name='0820am-next-day', check=pacific(30, 8, 20), state_code='falling', flow='125', time='at 8:00 AM PDT',
+             change='Last hour: -7 cfs (falling). About 3 hours: -22 cfs.',
+             state='Now at least 5% below the high of 191 cfs at Sep 29, 9:00 PM PDT. ' + FALLING,
+             since='Sep 29, 12:00 PM PDT', high='Highest reading since then: 191 cfs at Sep 29, 9:00 PM PDT.', rise=rise_line('79', 79, '46 cfs at Sep 29, 8:00 AM PDT'),
+             noaa=noaa_line('Sep 29, 8:14 AM PDT', '24 hours', '45.5', '8:00 AM PDT', '125', '79.5'),
+             tide='Low of -1.2 ft was at 1:56 AM PDT, 6 h 24 min before this check. The tide is rising to a high of 7.8 ft at 9:13 AM PDT, then a low of 5.4 ft at 2:07 PM PDT.'),
+    ]
+    replay_audits = 0
+    styles_seen = {}
+    for order, spec in enumerate(FRAMES, start=1):
+        name, check = spec['name'], spec['check']
+        shot = f'replay-{order}-{name}'   # numbered so the screenshots sort in time order
+        feeds = {'newest': spec['newest']} if 'newest' in spec else {}
+        frame_context, frame, source = open_frame(check, **feeds)
+        outlook_text = frame.locator('#outlook').inner_text()
+        # Banned words first, so that a banned word is reported as one.
+        assert banned_words(outlook_text) == [], (name, 'banned word on the Outlook tab', banned_words(outlook_text))
+        lines = river_lines(frame)
+        expected = {'flow': spec['flow'], 'river-time': spec['time'], 'river-age': '20 minutes old', 'river-change': spec['change'], 'river-state': spec['state'],
+                    'river-wait': WAIT if spec['state_code'] == 'new-high' else None,
+                    'river-rain-note': RAIN_BESIDE_PAUSE if spec['state_code'] in ('paused', 'may-have-peaked') else None,
+                    'river-past': past(spec['since']), 'river-high': spec['high'], 'river-rise': spec['rise'],
+                    'noaa-compare': spec['noaa'], 'noaa-flag': NOT_TRACKING, 'tide-now': spec['tide']}
+        for ident, text in expected.items():
+            assert lines[ident] == text, (name, ident, lines[ident], text)
+        assert frame.evaluate('feed => SamishData.riverState(SamishData.usgs(feed, Date.now()), Date.now()).state', source['payload']['usgs']) == spec['state_code'], (name, 'state code')
+        # "May have peaked" is never printed before the 11:00 PM reading, and "still rising" never after the river stopped.
+        assert ('may have peaked' in outlook_text) == (name == '1120pm'), (name, 'may-have-peaked wording')
+        assert ('Still rising' in outlook_text) == (spec['state_code'] == 'new-high'), (name, 'still-rising wording')
+        if name in ('1020pm', '1120pm'):
+            assert 'rising' not in lines['river-change'] and 'rising' not in lines['river-state'] and 'rising' not in said(frame, 'watch-title'), (name, 'the river is not called rising after it stopped')
+        if name == '0420pm':
+            assert 'Last hour: +1 cfs' in lines['river-change'] and 'peak' not in frame.locator('#river-block').inner_text().lower(), (name, '+1 in the last hour and no peak wording')
+        if name == '0435pm':
+            assert '67 of 172' in lines['river-state'] and '42 of them' in lines['river-state'] and 'may have peaked' not in outlook_text
+        # NOAA's current issue is set against the gauge on a first visit: nothing was saved on this device.
+        assert said(frame, 'watch-state') == 'NO EARLIER FORECAST', (name, 'a replay frame is a first visit')
+        # While "not tracking" holds: no forecast-to-fall sentence, no forecast-high time, no tide pairing.
+        assert said(frame, 'forecast-time') == NO_PEAK_TIME and said(frame, 'crest-time') == NO_PEAK_TIME, name
+        assert 'forecast to fall' not in outlook_text and 'Forecast high around' not in outlook_text and 'NOAA forecast high around' not in outlook_text, name
+        assert frame.locator('#crest-nearby .crest-tide').count() == 0 and frame.locator('#forecast-metric').is_hidden(), name
+        assert said(frame, 'ops-forecast') == 'Only falls' and said(frame, 'ops-forecast-note').startswith('NOAA’s path falls from its first value · issued '), name
+        # The NOAA-based card never says "below the numeric line" while the River block shows the number was passed.
+        assert 'below the numeric line' not in outlook_text, (name, 'reassuring line after the number was passed')
+        assert said(frame, 'rise-passed') == f'The measured rise passed the 100 cfs number at the {spec["since"]} reading (River block at the top). The figures on this card look forward from the newest reading and do not undo that.', name
+        assert said(frame, 'rise-noaa-dry') == NOAA_DRY + ' ' + CAVEAT, name
+        assert said(frame, 'rain-context-text') == RAIN_CONTEXT and frame.locator('#rain-context strong').inner_text() == 'Context, not an alert.', name
+        assert frame.locator('#tide-heading').inner_text().endswith('Bellingham prediction, not Samish Bay water level or boat clearance'), name
+        # No colour, icon or class in the three blocks changes with the state.
+        assert frame.locator('.now-block .pill, .now-block img, .now-block svg, .now-block [class*="caution"], .now-block [class*="good"]').count() == 0, name
+        for scheme in ['light', 'dark']:
+            frame.emulate_media(color_scheme=scheme)
+            frame.wait_for_timeout(150)
+            assert styles_seen.setdefault(scheme, block_style(frame)) == block_style(frame), (name, scheme, 'block styling changed with the state')
+            frame.screenshot(path=str(out / f'{shot}-desktop-1440-{scheme}.png'))
+            if scheme == 'light':
+                frame.screenshot(path=str(out / f'{shot}-desktop-1440-{scheme}-full.png'), full_page=True)
+        if name == '0720pm':
+            # The tide request starts 24 to 48 hours back (D.tideRequest), so the 6:46 PM high is in hand.
+            tide_request = next(u for u in source['requests'] if 'tidesandcurrents' in u)
+            assert 'begin_date=20260929' in tide_request and 'range=192' in tide_request and 'time_zone=gmt' in tide_request, tide_request
+            assert frame.locator('#tide-list .tide-row').first.inner_text().replace('\n', ' ').endswith('Sep 29, 6:46 PM PDT · passed'), 'the tide list keeps the high that just passed'
+            sizes = frame.evaluate(largest_type)
+            assert sizes['flow'] > sizes['max'], ('the flow figure must be the largest type on the Outlook tab (desktop)', sizes)
+        replay_audits += audit_page(frame, 'replay-' + name)
+        frame_context.close()
+        # The same moment on a phone, 390 by 664: the reading, its time and age and the last-hour change without scrolling.
+        phone_context, phone, _ = open_frame(check, width=390, height=664, **feeds)
+        assert river_lines(phone) == lines, (name, 'phone and desktop must print the same sentences')
+        for scheme in ['light', 'dark']:
+            phone.emulate_media(color_scheme=scheme)
+            phone.wait_for_timeout(150)
+            assert_first_screen(phone, (name, 390, 664, scheme))
+            phone.screenshot(path=str(out / f'{shot}-phone-390x664-{scheme}.png'))
+            if scheme == 'dark':
+                phone.screenshot(path=str(out / f'{shot}-phone-390x664-{scheme}-full.png'), full_page=True)
+        phone_context.close()
+    axe_runs += replay_audits
+
+    # ---- Phone windows 390 by 664 and 375 by 548, light and dark, at the 7:20 PM frame; and no sideways overflow at 320 pixels ----
+    for width, height in [(390, 664), (375, 548), (320, 568)]:
+        for scheme in ['light', 'dark']:
+            phone_context, phone, _ = open_frame(pacific(29, 19, 20), width=width, height=height, scheme=scheme)
+            assert_first_screen(phone, ('0720pm', width, height, scheme))
+            sizes = phone.evaluate(largest_type)
+            assert sizes['flow'] > sizes['max'], ('the flow figure must be the largest type on the Outlook tab (phone)', width, sizes)
+            for tab in ['research', 'sources']:
+                phone.locator('#tab-' + tab).click()
+                tab_sizes = phone.evaluate(largest_type)
+                assert tab_sizes['flow'] > tab_sizes['max'] and not phone.evaluate('document.documentElement.scrollWidth > innerWidth'), (tab, width, tab_sizes)
+            phone.locator('#tab-outlook').click()
+            phone.screenshot(path=str(out / f'phone-0720pm-{width}x{height}-{scheme}.png'))
+            phone_context.close()
+
+    # ---- A stalled feed is not a plateau ----
+    # (a) Opened at 7:20 PM, newest reading 5:30 PM: 110 minutes behind. The reading keeps its own time and age.
+    stalled_context, stalled, _ = open_frame(pacific(29, 19, 20), newest=pacific(29, 17, 30))
+    lines = river_lines(stalled)
+    assert lines['flow'] == '170' and lines['river-time'] == 'at 5:30 PM PDT' and lines['river-age'] == '110 minutes old', lines
+    assert lines['river-state'] == 'Cannot tell whether the river is rising: the gauge feed is 110 minutes behind.', lines['river-state']
+    for ident in ['river-change', 'river-wait', 'river-rain-note', 'river-past', 'river-high', 'river-rise']:
+        assert lines[ident] is None, ('a stalled feed prints no change figure and no state', ident, lines[ident])
+    block_text = stalled.locator('#river-block').inner_text()
+    assert not any(word in block_text for word in ['Last hour', 'About 3 hours', 'Still rising', 'No new high', 'Highest reading', 'Past the', 'Rise above']), block_text
+    # The comparison is still dated to the reading; with no way to tell whether a rise is in progress the peak time stays withheld.
+    assert lines['noaa-compare'] == noaa_line('8:14 AM PDT', '11 hours', '76.6', '5:30 PM PDT', '170', '93.4') and lines['noaa-flag'] == RISE_UNTOLD, lines
+    assert said(stalled, 'forecast-time') == NO_PEAK_TIME and said(stalled, 'crest-time') == NO_PEAK_TIME
+    assert said(stalled, 'feed-alert') == 'The newest gauge reading is 110 minutes old. Check the dated source details before planning.'
+    assert banned_words(stalled.locator('#outlook').inner_text()) == []
+    assert block_style(stalled) == styles_seen['light'], 'a stalled feed must not restyle the blocks'
+    stalled.screenshot(path=str(out / 'state-stalled-feed-110min-desktop-1440.png'))
+    axe_runs += audit_page(stalled, 'stalled-feed')
+    stalled_context.close()
+    stalled_context, stalled, _ = open_frame(pacific(29, 19, 20), width=390, height=664, scheme='dark', newest=pacific(29, 17, 30))
+    assert_first_screen(stalled, 'stalled feed on a phone', ids=('flow', 'river-time', 'river-age', 'river-state'))
+    stalled.screenshot(path=str(out / 'state-stalled-feed-110min-phone-390x664-dark.png'))
+    stalled_context.close()
+    # (b) The newest reading is 20 minutes old, but the readings from 5:45 to 6:45 PM never arrived: a 90-minute hole.
+    hole_context, holed, _ = open_frame(pacific(29, 19, 20), hole=(pacific(29, 17, 45), pacific(29, 18, 45)))
+    lines = river_lines(holed)
+    assert lines['flow'] == '181' and lines['river-time'] == 'at 7:00 PM PDT' and lines['river-age'] == '20 minutes old', lines
+    assert lines['river-state'] == 'Cannot tell whether the river is rising: there is a 90-minute hole in the gauge readings of the last hour.', lines['river-state']
+    for ident in ['river-change', 'river-wait', 'river-rain-note', 'river-past', 'river-high', 'river-rise']:
+        assert lines[ident] is None, ('a hole in the last hour prints no change figure and no state', ident, lines[ident])
+    assert lines['noaa-flag'] == RISE_UNTOLD and said(holed, 'feed-alert').startswith('Gauge readings are missing in the last hour.')
+    holed.screenshot(path=str(out / 'state-hole-90min-desktop-1440.png'))
+    hole_context.close()
+
+    # ---- A hole earlier in the last 24 hours. The rise is unavailable; it is never printed as "no rise" ----
+    gap_context, gapped, _ = open_frame(pacific(29, 19, 20), hole=(pacific(29, 4, 15), pacific(29, 5, 15)))
+    lines = river_lines(gapped)
+    assert lines['river-change'] == 'Last hour: +7 cfs (rising). About 3 hours: +17 cfs.' and lines['river-rise'] == 'Measured rise unavailable: the gauge record has a gap in the last 24 hours.', lines
+    assert lines['river-state'] is None and lines['river-past'] is None and lines['river-high'] is None, lines
+    assert 'no rise' not in gapped.locator('#outlook').inner_text().lower() and 'below the numeric line' not in gapped.locator('#outlook').inner_text()
+    assert lines['noaa-flag'] == RISE_UNTOLD and said(gapped, 'crest-time') == NO_PEAK_TIME, 'the peak time is withheld when the rise status is unknown'
+    gapped.screenshot(path=str(out / 'state-rise-unavailable-desktop-1440.png'))
+    axe_runs += audit_page(gapped, 'rise-unavailable')
+    gap_context.close()
+
+    # ---- A rise older than the readings the page can compare. No "highest reading", no state, no count ----
+    old_context, old_rise, _ = open_frame(pacific(29, 19, 20), first=pacific(28, 12, 15))
+    lines = river_lines(old_rise)
+    assert lines['river-past'] == 'The measured rise passed the 100 cfs number at or before 12:15 PM PDT. The top of that rise is older than the readings this page compares.', lines['river-past']
+    assert lines['river-state'] is None and lines['river-high'] is None and lines['river-wait'] is None and lines['river-rain-note'] is None, lines
+    assert lines['river-rise'] == rise_line('165.1', 165, low_at_1am) and lines['river-change'] == 'Last hour: +7 cfs (rising). About 3 hours: +17 cfs.', lines
+    block_text = old_rise.locator('#river-block').inner_text()
+    assert 'Highest reading' not in block_text and 'Still rising' not in block_text and str(EVIDENCE['rises']['count']) not in block_text, block_text
+    assert lines['noaa-flag'] == NOT_TRACKING and 'below the numeric line' not in old_rise.locator('#outlook').inner_text()
+    old_rise.screenshot(path=str(out / 'state-rise-at-or-before-desktop-1440.png'))
+    axe_runs += audit_page(old_rise, 'rise-at-or-before')
+    old_context.close()
+
+    # ---- Before the number is passed (9:20 AM): no state, no "high" language; the NOAA-based card is labelled as such ----
+    early_context, early, _ = open_frame(pacific(29, 9, 20))
+    lines = river_lines(early)
+    assert lines['flow'] == '62.5' and lines['river-change'] == 'Last hour: +16.5 cfs (rising). About 3 hours: +32.6 cfs.' and lines['river-rise'] == rise_line('46.6', 46, low_at_1am), lines
+    assert all(lines[ident] is None for ident in ['river-state', 'river-wait', 'river-rain-note', 'river-past', 'river-high']), lines
+    assert lines['noaa-compare'] == 'NOAA’s river forecast, issued 8:14 AM PDT (1 hour ago), has 69.3 cfs for 9:00 AM PDT. The gauge read 62.5 cfs then: 6.8 cfs lower.' and lines['noaa-flag'] is None, lines
+    assert early.locator('#rise-passed').is_hidden() and early.locator('.rise-card h2').inner_text() == 'What NOAA’s forecast adds'
+    assert said(early, 'crest-time') == 'NOAA forecast high around Sep 29, 11:00 AM PDT' and said(early, 'ops-forecast') == '91 cfs'
+    assert said(early, 'ops-forecast-note') == 'within the available path · issued 8:14 AM PDT' and said(early, 'rise-noaa-dry') == NOAA_DRY + ' ' + CAVEAT
+    assert banned_words(early.locator('#outlook').inner_text()) == []
+    early.screenshot(path=str(out / 'replay-0-0920am-before-the-number-desktop-1440.png'))
+    early_context.close()
+
+    # ---- First visit: a NOAA issue exactly 7 hours old and the gauge at exactly twice its value (invented flat path) ----
+    flat_path = [(stamp, 81.5) for stamp, _ in REPLAY_NOAA_PATH]
+    first_context, first_visit, _ = open_frame(pacific(29, 15, 20), noaa_path=flat_path, noaa_issue=pacific(29, 8, 20))
+    assert said(first_visit, 'watch-state') == 'NO EARLIER FORECAST', 'no earlier forecast is saved on a first visit'
+    assert said(first_visit, 'noaa-compare') == noaa_line('8:20 AM PDT', '7 hours', '81.5', '3:00 PM PDT', '163', '81.5') and said(first_visit, 'noaa-flag') == NOT_TRACKING
+    assert said(first_visit, 'forecast-time') == NO_PEAK_TIME and said(first_visit, 'ops-forecast-note') == 'within the available path · issued 8:20 AM PDT'
+    first_visit.screenshot(path=str(out / 'state-first-visit-noaa-mismatch-desktop-1440.png'))
+    first_context.close()
+
+    # ---- One device left open through the evening: what a screen reader is told, and the earlier-forecast headline ----
+    stay_context, stay, stay_source = open_frame(pacific(29, 16, 20))
+    stay.evaluate("""() => { window.__told = []; const el = document.getElementById('river-announce');
+      new MutationObserver(() => window.__told.push(el.textContent)).observe(el, {childList: true, characterData: true, subtree: true}); }""")
+    assert stay.locator('#river-announce').get_attribute('aria-live') == 'polite' and stay.locator('#river-announce').get_attribute('role') == 'status'
+    assert stay.locator('#river-block').get_attribute('aria-live') is None and said(stay, 'river-announce') == '', 'nothing is announced on a first load'
+    def advance(check, **feeds):
+        stay_context.clock.set_fixed_time(check)
+        stay_source['payload'] = replay_payload(check, **feeds)
+        stay.locator('#refresh').click()
+        settle(stay)
+        return stay.evaluate('window.__told')
+    assert advance(pacific(29, 16, 25)) == [], 'a refresh with no change of state announces nothing'
+    paused_at_415 = 'No new high since 3:15 PM PDT. ' + PAUSE
+    assert advance(pacific(29, 16, 35), newest=pacific(29, 16, 15)) == [paused_at_415], 'the pause is announced once'
+    assert advance(pacific(29, 16, 40), newest=pacific(29, 16, 15)) == [paused_at_415], 'the same state is not announced again on the next refresh'
+    told = advance(pacific(29, 19, 20))
+    assert told == [paused_at_415, FRAMES[4]['state']], told
+    assert said(stay, 'watch-state') == 'NO EARLIER FORECAST', 'three hours have not yet passed since the first visit'
+    told = advance(pacific(29, 22, 20))
+    assert told[2:] == [FRAMES[5]['state']], told
+    # Version 6 said "still rising" here: the three-hour change is still +10 cfs. The last hour is level.
+    assert said(stay, 'watch-state') == 'ABOVE EARLIER FORECAST' and said(stay, 'watch-change') == '+10'
+    assert said(stay, 'watch-title') == 'River is above the earlier NOAA forecast, but not rising in the last hour of readings'
+    assert 'Over the last hour of readings it was about level.' in said(stay, 'watch-detail') and 'still rising' not in stay.locator('#outlook').inner_text().lower()
+    assert banned_words(stay.locator('#outlook').inner_text()) == []
+    stay.screenshot(path=str(out / 'state-returning-device-1020pm-desktop-1440.png'), full_page=True)
+    axe_runs += audit_page(stay, 'returning-device-1020pm')
+    told = advance(pacific(29, 23, 20))
+    assert told[3:] == [FRAMES[6]['state']] and 'rising' not in said(stay, 'watch-title').replace('not rising', ''), told
+    # The feed then stalls: the river sentence and the NOAA sentence both change, and both are told once.
+    told = advance(pacific(30, 1, 20), newest=pacific(29, 23, 0))
+    assert told[4:] == ['Cannot tell whether the river is rising: the gauge feed is 140 minutes behind. ' + RISE_UNTOLD], told
+    assert said(stay, 'watch-state') == 'CHECK UNAVAILABLE', 'the earlier-forecast check does not run on a reading over 90 minutes old'
+    stay_context.close()
+
+    # ---- Rain: a block with no value against a block forecast at exactly zero (the +24 to 30 hour block) ----
+    rain_shots = {}
+    for label, amounts in [('missing', [2.54, 1.27, 0.51, 0, None, 0, 0]), ('zero', [2.54, 1.27, 0.51, 0, 0, 0, 0])]:
+        rain_context, rainy, _ = open_frame(pacific(29, 19, 20), rain_mm=amounts)
+        chart_text = rainy.locator('#rain-chart svg').evaluate("svg => [...svg.querySelectorAll('text')].map(t => t.childNodes[0].textContent)")
+        rain_shots[label] = {'pixels': rainy.locator('#rain-chart').screenshot(path=str(out / f'rain-block-{label}-desktop-1440.png')), 'text': chart_text,
+                             'missing': rainy.locator('#rain-chart svg rect.rain-missing').count(), 'bars': rainy.locator('#rain-chart svg rect.rain-a, #rain-chart svg rect.rain-b').count(),
+                             'table': rainy.locator('#rain-forecast-table tbody tr').nth(4).evaluate('row => [...row.cells].slice(1).map(cell => cell.textContent)'), 'total': said(rainy, 'rain-total')}
+        rain_context.close()
+    assert rain_shots['missing']['pixels'] != rain_shots['zero']['pixels'], 'a missing rain block must not be drawn like zero rain'
+    assert rain_shots['missing']['text'].count('no data') == 2 and 'No data (not zero)' in rain_shots['missing']['text'] and rain_shots['missing']['text'].count('0') == 4, rain_shots['missing']['text']
+    assert 'no data' not in rain_shots['zero']['text'] and 'No data (not zero)' not in rain_shots['zero']['text'] and rain_shots['zero']['text'].count('0') == 6, rain_shots['zero']['text']
+    assert rain_shots['missing']['missing'] == 3 and rain_shots['zero']['missing'] == 0, 'two hatched columns and their legend swatch, against none'
+    assert rain_shots['missing']['bars'] == rain_shots['zero']['bars'] == 8, 'six real bars and the two legend swatches in both'
+    assert rain_shots['missing']['table'] == ['Unavailable', 'Unavailable'] and rain_shots['zero']['table'] == ['0.00 in.', '0.00 in.'], (rain_shots['missing']['table'], rain_shots['zero']['table'])
+    assert rain_shots['missing']['total'] == rain_shots['zero']['total'] == '0.17', 'the 24-hour headline is the same: the block lies beyond it'
+
+    # ---- Observed rain: one gauge at 0.00 inch for 24 hours while both others report 0.25 inch or more ----
+    suspect_context, suspect, _ = open_frame(pacific(29, 19, 20), rrm_rows=['Padilla Bay Farm 0.00 0.05 0.10 0.20 0.30 0.40 0.50', 'Burlington 0.00 0.03 0.08 0.15 0.25 0.35 0.45', 'Sedro Wooley RAWS 0.00 0.00 0.00 0.00 0.00 0.00 0.00'])
+    assert suspect.locator('#observed-rain-table .suspect-note').count() == 1
+    assert suspect.locator('#observed-rain-table tbody tr').nth(2).locator('th').inner_text().split('\n') == ['Sedro-Woolley RAWS', 'Reads zero while both other gauges report rain; treat as suspect.']
+    suspect.locator('#observed-rain-table').screenshot(path=str(out / 'rain-suspect-zero-desktop-1440.png'))
+    axe_runs += audit_page(suspect, 'suspect-zero-rain')
+    suspect_context.close()
+    suspect_context, suspect, _ = open_frame(pacific(29, 19, 20), rrm_rows=['Padilla Bay Farm 0.00 0.05 0.10 0.20 0.30 0.40 0.50', 'Burlington 0.00 0.03 0.08 0.15 0.24 0.35 0.45', 'Sedro Wooley RAWS 0.00 0.00 0.00 0.00 0.00 0.00 0.00'])
+    assert suspect.locator('#observed-rain-table .suspect-note').count() == 0, 'no flag when one of the other gauges is under 0.25 inch'
+    suspect_context.close()
+
+    # ---- November to April: nothing rain-related is shown as context, and NOAA's dry-season record is not shown ----
+    winter_check = datetime(2025, 11, 15, 20, 0, tzinfo=timezone.utc)   # synthetic feeds; noon Pacific in November
+    winter_context, winter, _ = open_frame(winter_check, feeds_payload=fixtures(winter_check))
+    assert winter.locator('#rain-context').is_hidden() and winter.locator('#rain-context').inner_text() == '' and winter.locator('#rise-noaa-dry').is_hidden()
+    assert said(winter, 'ops-threshold') == '400 cfs' and said(winter, 'river-rise') == 'Rise above the 24-hour low: 25 cfs (6% of the 400 cfs November–February number; low 76 cfs at Nov 14, 12:00 PM PST).'
+    winter_text = winter.locator('#outlook').inner_text().lower()
+    assert 'dry season' not in winter_text and 'dry-season' not in winter_text and 'context, not an alert' not in winter_text and 'may to october rises' not in winter_text
+    winter_context.close()
+
+    # ---- Research tab: every count in the look-back section equals the evidence object ----
+    page.locator('#tab-research').click()
+    T_ALL, T_DRY, E_ALIGNED = EVIDENCE['timing']['all'], EVIDENCE['timing']['dry'], EVIDENCE['aligned']
+    assert page.locator('#lookback-title').inner_text() == f"What {EVIDENCE['rises']['count']} past rises say about the peak" == 'What 172 past rises say about the peak'
+    assert '13 OCTOBER 2026' in page.locator('.lookback .eyebrow').first.inner_text()
+    lede = page.locator('#lookback-lede').inner_text()
+    assert lede.startswith(f"Counts from {EVIDENCE['rises']['count']} rises at the {EVIDENCE['rises']['place']}, {EVIDENCE['rises']['period']}, read from {EVIDENCE['rises']['readings']},") and 'none is a forecast' in lede, lede
+    expected_cards = {
+        'timing': [f"Across {T_ALL['rises']} rises, the highest reading came a median of {half(T_ALL['medianHours'])} hours after the 24-hour rise passed the seasonal number (the middle value: half took less, half took more). "
+                   f"Half of the rises took between {half(T_ALL['middleHalfHours'][0])} and {half(T_ALL['middleHalfHours'][1])} hours; {T_ALL['under2h']} took under 2 hours and {T_ALL['atLeast16h']} of {T_ALL['rises']} took 16 hours or more.",
+                   f"In {T_DRY['months']} ({T_DRY['rises']} rises) the median was {half(T_DRY['medianHours'])} hours and half took between {half(T_DRY['middleHalfHours'][0])} and {half(T_DRY['middleHalfHours'][1])} hours; "
+                   f"{T_DRY['over8h']} took more than 8 hours and {T_DRY['atLeast16h']} took 16 hours or more.",
+                   'The spread is too wide for one clock time, so this page prints no time for the top of a rise.'],
+        'wait': [f"For the rises whose highest reading had not yet come, the typical further time to it (the middle value) stayed between {half(E_WAIT['typicalWaitHours'][0])} and {half(E_WAIT['typicalWaitHours'][1])} hours "
+                 f"at every stage checked, and one rise in four needed {half(E_WAIT['oneInFourAtLeastHours'])} hours or more."],
+        'pause': [f"The first time each rise went {E_PAUSE['afterMinutes']} minutes of readings with no new high, {E_PAUSE['higherAgain']} of {E_PAUSE['rises']} went higher again within a day, {E_PAUSE['higherByMoreThan5Percent']} of them by more than 5%."],
+        'peak2h': [f"The first time each rise went 2 hours of readings with no new high, the river later climbed more than 5% above that high within 12 hours in {E_PEAK['within12h']} of {E_PEAK['rises']} rises "
+                   f"(about 1 in {E_PEAK['aboutOneIn12h']}) and within 24 hours in {E_PEAK['within24h']} (about 1 in {E_PEAK['aboutOneIn24h']})."],
+        'falling': [f"The first time each rise read at least 5% below its highest reading so far, the river later climbed more than 5% above that high within 12 hours in {E_FALL['within12h']} of {E_FALL['rises']} rises "
+                    f"(about 1 in {E_FALL['aboutOneIn12h']}) and within 24 hours in {E_FALL['within24h']} (about 1 in {E_FALL['aboutOneIn24h']})."],
+        'aligned': [f"At the Samish over {E_ALIGNED['period']} ({E_ALIGNED['rises']} rises), NOAA’s river forecast shifted to start at the latest gauge reading gave {E_ALIGNED['falseAlertEpisodesAligned']} false-alert episodes "
+                    f"against {E_ALIGNED['falseAlertEpisodesAsIssued']} for the forecast read as issued, with {E_ALIGNED['warned12hEitherWay']} rises warned {E_ALIGNED['leadHours']} hours or more ahead either way.",
+                    'Limit: the shift does nothing for a rise NOAA’s river forecast does not show. This page does not draw the current forecast shifted to the gauge; it says when the gauge is above the forecast instead.'],
+        'noaaDry': [NOAA_DRY, 'A closure-size rise is a 24-hour rise as large as the seasonal number.'],
+        'rainContext': [RAIN_CONTEXT]}
+    assert page.locator('#lookback-grid [data-evidence]').evaluate_all('cards => cards.map(card => card.dataset.evidence)') == list(expected_cards)
+    for key, sentences in expected_cards.items():
+        card = page.locator(f'#lookback-grid [data-evidence="{key}"]')
+        assert card.locator('p:not(.eyebrow):not(.note):not(.meta)').all_inner_texts() == sentences, (key, card.locator('p').all_inner_texts())
+        assert card.locator('p.note').inner_text() == f"Period: {EVIDENCE[key]['period']}. {CAVEAT}", key
+        assert card.locator('p.meta').inner_text() == EVIDENCE[key]['source'], key
+    wait_rows = page.locator('#lookback-grid [data-evidence="wait"] tbody tr').evaluate_all("rows => rows.map(row => [...row.cells].map(cell => Number(cell.textContent)))")
+    assert wait_rows == [list(row) for row in zip(E_WAIT['stagesHours'], E_WAIT['risesStillWaiting'], E_WAIT['medianMoreHours'], E_WAIT['upperQuartileMoreHours'])], wait_rows
+    assert page.locator('#lookback-grid .lookback-table').evaluate('el => el.scrollHeight <= el.clientHeight'), 'every row of the look-back table is on screen without scrolling inside it'
+    lookback_text = page.locator('#lookback-grid').inner_text()
+    for literal in ['a median of 5½ hours', 'between 3 and 9 hours', '18 took under 2 hours', '22 of 172 took 16 hours or more', '(52 rises) the median was 6 hours', 'between 3½ and 8 hours', '13 took more than 8 hours',
+                    '5 took 16 hours or more', 'between 3½ and 7 hours', '67 of 172', '42 of them', 'in 19 of 172 rises (about 1 in 9)', 'in 30 (about 1 in 6)', 'in 10 of 172 rises (about 1 in 17)', 'in 21 (about 1 in 8)',
+                    '(66 rises)', '29 false-alert episodes against 38', '36 rises warned 12 hours or more ahead', '25 of 32', 'not for 7', '(23 of 45)', '(7 of 26)', '4 of the 7', '10 of 32']:
+        assert literal in lookback_text, ('look-back figure missing from the Research tab', literal)
+    assert lookback_text.count(CAVEAT) == 8 and '23 of 33' not in page.locator('#research').inner_text(), 'each entry says it is a look-back; the dry-season record is 25 of 32, never 23 of 33'
+    assert 'kind of divergence a grower described' in page.locator('#research').inner_text() and 'RESEARCH UPDATE · OCTOBER 11, 2026' in page.locator('#research').inner_text()
+    assert page.locator('#research .research-stat').count() == 2, 'the 11 October sections are kept'
+    # Sources tab: the display rules are written from the rule constants.
+    page.locator('#tab-sources').click()
+    rules_text = page.locator('#river-rules').inner_text()
+    assert page.locator('#river-rules li').count() == 11
+    for literal in [f"recent for {RULES['freshMinutes']} minutes", 'recent for 90 minutes', 'more than 60 minutes of readings are missing inside the last hour', 'never against this device’s clock', 'within 20 minutes either way',
+                    '“rising” only at +2 cubic feet per second (cfs) and +2% or more', '“falling” only at −2 cfs and −2% or beyond', 'never as zero or as “no rise”', 'first reading of the last 48 hours', 'remembered for 48 hours of readings',
+                    'strictly higher than every earlier reading of this rise. An equal reading is not a new high.', '60 minutes of readings with no new high is called a pause; 120 minutes or more is “may have peaked”',
+                    'at least 5% below the high is “falling”', 'higher by at least 10% of the seasonal number and a measured rise is in progress', 'so it works on a first visit', 'look-backs on 172 Samish rises of 2011 to 2023 (15-minute readings)',
+                    'keeps the last high or low after it passes', 'hatched “no data” column', 'report 0.25 inch or more is marked suspect', 'May to October only']:
+        assert literal in rules_text, ('display rule missing from the Sources tab', literal)
+    assert 'more than 2 hours old are marked stale' not in page.locator('#sources').inner_text()
+    page.locator('#tab-outlook').click()
+    assert 'v7 / October 2026' in page.locator('footer').inner_text() and page.evaluate("[...document.querySelectorAll('link[rel=stylesheet], script[src]')].every(el => (el.href || el.src).endsWith('?v=7'))")
+    # The flow figure is the largest type on every tab of the desktop page.
+    for tab in ['outlook', 'research', 'sources']:
+        page.locator('#tab-' + tab).click()
+        sizes = page.evaluate(largest_type)
+        assert sizes['flow'] > sizes['max'], ('the flow figure must be the largest type on the page', tab, sizes)
+    page.locator('#tab-outlook').click()
+    assert banned_words(page.locator('#outlook').inner_text()) == [], banned_words(page.locator('#outlook').inner_text())
     # A numerically available three-hour pair is not operationally current when
     # its latest endpoint is stale. All change displays must fail closed.
     original_observed = payload['nwps']['observed']
@@ -738,15 +1323,19 @@ with sync_playwright() as p:
     payload['usgs']['features'][0]['properties']['time'] = ISO(-10)
     page.locator('#refresh').click()
     page.wait_for_function("!document.getElementById('refresh').disabled")
-    assert page.locator('#gauge-status').inner_text() == 'Stale observation'
-    assert page.locator('#change3').inner_text() == 'Unavailable'
-    assert page.locator('#change24').inner_text() == 'Unavailable'
-    assert page.locator('#ops-change').inner_text() == 'Unavailable'
+    # Version 7: a reading over 90 minutes old gives "Cannot tell", its own time and age, and no change figure at all.
+    assert re.fullmatch(r'Cannot tell whether the river is rising: the gauge feed is 6\d\d minutes behind\.', page.locator('#river-state').inner_text())
+    assert re.fullmatch(r'6\d\d minutes old', page.locator('#river-age').inner_text())
+    for ident in ['river-change', 'river-rise', 'river-past', 'river-high', 'river-wait', 'river-rain-note']:
+        assert page.locator('#' + ident).is_hidden(), ident
+    assert 'Last hour' not in page.locator('#river-block').inner_text() and 'About 3 hours' not in page.locator('#river-block').inner_text()
+    assert re.match(r'The newest gauge reading is 6\d\d minutes old', page.locator('#feed-alert').inner_text())
     payload['nwps']['observed'] = original_observed
     payload['usgs']['features'][0]['properties']['time'] = original_usgs_time
     page.locator('#refresh').click()
     page.wait_for_function("!document.getElementById('refresh').disabled")
-    assert page.locator('#gauge-status').inner_text() == 'Recent observation'
+    assert page.locator('#river-change').inner_text() == 'Last hour: +2 cfs (rising). About 3 hours: +4 cfs.'
+    assert page.locator('#river-state').is_hidden() and page.locator('#feed-alert').is_hidden()
     page.locator('#radar-toggle').click()
     page.wait_for_function("['Latest retrieved frame','Retrieved frame'].includes(document.getElementById('radar-status').textContent)")
     assert page.locator('#radar-toggle').inner_text() == 'Play animation'
@@ -762,7 +1351,9 @@ with sync_playwright() as p:
     # and keeps the safety-critical closure link at a 44-pixel touch target.
     for width in [320, 390]:
         page.set_viewport_size({'width': width, 'height': 960})
-        closure_link = page.locator('.official-rail .button-link')
+        closure_link = page.locator('.official-line .button-link')
+        assert ' '.join(page.locator('.official-line').inner_text().split()) == 'Official status is separate. Check commercial closures ↗'
+        assert closure_link.get_attribute('href') == 'https://doh.wa.gov/commercialshellfishmap'
         assert closure_link.evaluate('el => el.getBoundingClientRect().height >= 44')
         closure_link.focus()
         page.keyboard.press('Tab')
@@ -907,6 +1498,12 @@ with sync_playwright() as p:
     assert download.suggested_filename.startswith('samish-field-snapshot-')
     assert 'FORECAST CHANGE CHECK: ABOVE EARLIER FORECAST' in snapshot_text, repr(snapshot_text[:500])
     assert 'Official commercial status is not ingested' in snapshot_text
+    # Version 7: the copied snapshot carries the same River, NOAA and Tide lines the screen shows, and nothing more.
+    assert re.search(r'^RIVER, measured at the gauge: 101 cfs at .+ P[DS]T, \d+ minutes? old$', snapshot_text, re.M), snapshot_text[:400]
+    assert 'Last hour: +2 cfs (rising). About 3 hours: +4 cfs.' in snapshot_text and 'Rise above the 24-hour low: 25 cfs' in snapshot_text
+    assert 'NOAA RIVER FORECAST, current issue against the gauge\nNOAA’s river forecast, issued ' in snapshot_text and 'The gauge read 101 cfs then: 25 cfs lower.' in snapshot_text
+    assert 'TIDE, Bellingham prediction, not Samish Bay water level or boat clearance\nLow of 2.0 ft was at ' in snapshot_text and ' · passed' in snapshot_text
+    assert 'Still rising' not in snapshot_text and 'No new high' not in snapshot_text and banned_words(snapshot_text.split('Official commercial status')[0]) == []
     assert 'https://doh.wa.gov/commercialshellfishmap' in snapshot_text
 
     page.evaluate("value => localStorage.setItem('samish-river-outlook.forecast-snapshots.v1', JSON.stringify([value]))", saved_snapshot(95))
@@ -929,11 +1526,25 @@ with sync_playwright() as p:
     observed_minus_three['primary'] = .110
     page.locator('#refresh').click()
     page.wait_for_function("!document.getElementById('refresh').disabled")
+    # Version 7: the three-hour change is -9 cfs here, but the last hour is +2 cfs and +2%, so the
+    # headline says rising. Under version 6 this state read "not rising now".
     assert page.locator('#watch-state').inner_text() == 'ABOVE EARLIER FORECAST'
-    assert 'not rising now' in page.locator('#watch-title').inner_text()
+    assert page.locator('#watch-change').inner_text() == '-9'
+    assert page.locator('#watch-title').inner_text() == 'River is above the earlier NOAA forecast and rising in the last hour of readings'
+    # With the last hour level (+0.5 cfs) the headline says "not rising", whatever the three-hour change is.
+    observed_minus_one = next(row for row in payload['nwps']['observed']['data'] if row['validTime'] == ISO(-1))
+    original_minus_one = observed_minus_one['primary']
+    observed_minus_one['primary'] = .1005
+    observed_minus_three['primary'] = original_minus_three
+    page.locator('#refresh').click()
+    page.wait_for_function("!document.getElementById('refresh').disabled")
+    assert page.locator('#watch-state').inner_text() == 'ABOVE EARLIER FORECAST'
+    assert page.locator('#watch-change').inner_text() == '+4'
+    assert page.locator('#watch-title').inner_text() == 'River is above the earlier NOAA forecast, but not rising in the last hour of readings'
+    assert 'Over the last hour of readings it was about level.' in page.locator('#watch-detail').inner_text()
     axe_runs += audit_state('above-saved-path')
     screenshot_state('above-saved-path')
-    observed_minus_three['primary'] = original_minus_three
+    observed_minus_one['primary'] = original_minus_one
 
     # Restore the earlier-path fixture so release screenshots include the neutral
     # comparison state rather than only the first-visit history-building state.
@@ -987,7 +1598,7 @@ with sync_playwright() as p:
                     assert 'browser' not in panel_text, (scheme, width, tab, 'browser language')
                     assert 'profile' not in panel_text, (scheme, width, tab, 'profile language')
                 if width == 390 and tab == 'outlook':
-                    assert page.locator('#ops-strip, .ops-strip').first.evaluate('el => el.getBoundingClientRect().top < 650')
+                    assert page.locator('#river-block').evaluate('el => el.getBoundingClientRect().top < 650')
                     page.wait_for_function("Math.abs(document.querySelector('#rain-chart svg').viewBox.baseVal.width - document.querySelector('#rain-chart svg').getBoundingClientRect().width) <= 2")
                     assert page.locator('#rain-chart svg').evaluate("svg => Math.abs(svg.viewBox.baseVal.width - svg.getBoundingClientRect().width) <= 2")
                     assert page.locator('#rain-chart text').first.evaluate("el => parseFloat(getComputedStyle(el).fontSize) >= 11")
@@ -1193,7 +1804,10 @@ with sync_playwright() as p:
     motion_page.close()
     assert not errors, errors
     axe_note = f'; {axe_runs} axe-core panel audits' if axe_runs else ''
-    print(f'PASS: {result + v7_result} numerical contracts ({result} from version 6 and earlier, {v7_result} for the version 7 river, forecast, tide, rain and look-back rules); live UI fixtures, storage, failure isolation, keyboard, clipboard and 30 responsive/dark panel checks{axe_note}. Screenshots: {out}')
+    print(f'PASS: {result + v7_result} numerical contracts ({result} from version 6 and earlier, {v7_result} for the version 7 river, forecast, tide, rain and look-back rules); '
+          f'version 7 page replay of 29 September 2026 ({len(FRAMES)} fixed-clock frames at desktop and phone sizes, every River, NOAA and Tide sentence exact), stalled feed, first visit, '
+          f'phone type sizes, missing-against-zero rain, evidence object against rendered text, banned words and screen-reader announcements; '
+          f'live UI fixtures, storage, failure isolation, keyboard, clipboard and 30 responsive/dark panel checks{axe_note}. Screenshots: {out}')
     browser.close()
 if SERVER:
     SERVER.shutdown()
